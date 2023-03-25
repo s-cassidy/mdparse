@@ -4,7 +4,9 @@ import io
 class StringPeek(io.StringIO):
     def peek(self, count: int = 1):
         head = self.tell()
-        peek = self.read(count)
+        if count < 0:
+            self.seek(head + count, 0)
+        peek = self.read(abs(count))
         self.seek(head, 0)
         return peek
 
@@ -15,6 +17,7 @@ class Tokeniser:
         self.current_stream = io.StringIO()
         self.markdown = {"*": self.star_handler,
                          "\\": self.escape_handler,
+                         "#": self.hash_handler,
                          }
 
     def tokenise(self):
@@ -31,16 +34,19 @@ class Tokeniser:
         print(self.tokens)
         return 1
 
+    def _end_token(self):
+        self.tokens.append(self.current_stream.getvalue())
+        self.current_stream.close()
+        self.current_stream = io.StringIO()
+
     def process(self, char):
         if char in self.markdown:
-            self.tokens.append(self.current_stream.getvalue())
-            self.current_stream.close()
-            self.current_stream = io.StringIO()
             self.markdown[char]()
         else:
             self.current_stream.write(char)
 
     def star_handler(self):
+        self._end_token()
         if self.stream.peek() == "*":
             self.stream.read(1)
             self.tokens.append("!BOLD")
@@ -48,10 +54,10 @@ class Tokeniser:
         self.tokens.append("!ITALIC")
 
     def escape_handler(self):
-        self.current_stream.close()
-        self.current_stream = io.StringIO(self.tokens.pop())
-        self.current_stream.seek(0, 2)
         self.current_stream.write(self.stream.read(1))
+
+    def hash_handler(self):
+        pass
 
 
 markdown = "This is \\*escaped\\*, this is **bold** this is *italic*"
