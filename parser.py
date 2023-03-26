@@ -25,12 +25,15 @@ class StringPeek(io.StringIO):
         self.seek(head, 0)
         return peek
 
+    def relative_seek(self, offset: int = 1) -> None:
+        self.seek(self.tell() + offset)
+
 
 class Tokeniser:
     def __init__(self, stream: StringPeek):
         self.tokens: list[str] = []
         self.stream = stream
-        self.current_stream = io.StringIO()
+        self.current_token = io.StringIO()
         self.markdown = {"*": self.star_handler,
                          "\\": self.escape_handler,
                          "#": self.hash_handler,
@@ -45,22 +48,22 @@ class Tokeniser:
     def next(self) -> int:
         c = self.stream.read(1)
         if not c:
-            self.tokens.append(self.current_stream.getvalue())
+            self.tokens.append(self.current_token.getvalue())
             return 0
         self.process(c)
         return 1
 
     def _end_current_token(self) -> None:
-        if token := self.current_stream.getvalue():
+        if token := self.current_token.getvalue():
             self.tokens.append(token)
-        self.current_stream.close()
-        self.current_stream = io.StringIO()
+        self.current_token.close()
+        self.current_token = io.StringIO()
 
     def process(self, char) -> None:
         if char in self.markdown:
             self.markdown[char]()
         else:
-            self.current_stream.write(char)
+            self.current_token.write(char)
 
     def is_first_line_character(self) -> bool:
         if self.stream.tell() == 1:
@@ -101,7 +104,7 @@ class Tokeniser:
             self.tokens.append("!_ITALIC")
 
     def escape_handler(self) -> None:
-        self.current_stream.write(self.stream.read(1))
+        self.current_token.write(self.stream.read(1))
 
     def newline_handler(self) -> None:
         self._end_current_token()
@@ -116,11 +119,31 @@ class Tokeniser:
             if heading := self.check_heading():
                 self._end_current_token()
                 self.handle_heading(heading)
+                return
         if tag := self.check_tag():
-            pass
+            self._end_current_token()
+            self.tokens.append(tag)
+            self.stream.relative_seek(len(tag)-1)
+        else:
+            self.current_token.write("#")
 
     def check_tag(self) -> str | bool:
-        pass
+        head = self.stream.tell()
+        end = self.stream.seek(0, 2)
+        self.stream.seek(head)
+        tag = io.StringIO("#")
+        tag.seek(1)
+        for i in range(0, end - head):
+            char = self.stream.peek_char(i)
+            if char.isalnum() or char in "-/_":
+                tag.write(char)
+            else:
+                break
+        tag_string = tag.getvalue()
+        if [char for char in tag_string if char.isalpha()]:
+            return tag_string
+        else:
+            return False
 
     def check_heading(self) -> str | bool:
         head = self.stream.tell()
@@ -155,7 +178,7 @@ This is \\*escaped\\*, this is **bold** this is *italic*
 This is __bold__ as well
 
 ### Heading 3
-This is ## not a heading
+This is #tag not a ## # not a tag
 """
 tokeniser = Tokeniser(StringPeek(markdown))
 tokeniser.tokenise()
