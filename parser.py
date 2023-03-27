@@ -7,11 +7,11 @@ class StringPeek(io.StringIO):
         Returns string of <count> characters from the cursor
         without moving the cursor. Count can be negative.
         '''
-        head = self.tell()
+        cursor = self.tell()
         if count < 0:
-            self.seek(head + count, 0)
+            self.seek(cursor + count, 0)
         peek = self.read(abs(count))
-        self.seek(head, 0)
+        self.seek(cursor, 0)
         return peek
 
     def peek_char(self, offset: int = 1) -> str:
@@ -19,10 +19,10 @@ class StringPeek(io.StringIO):
         Return character <offset> characters from the cursor
         without moving the cursor. Count can be negative.
         '''
-        head = self.tell()
-        self.seek(head + offset, 0)
+        cursor = self.tell()
+        self.seek(cursor + offset, 0)
         peek = self.read(1)
-        self.seek(head, 0)
+        self.seek(cursor, 0)
         return peek
 
     def relative_seek(self, offset: int = 1) -> None:
@@ -39,6 +39,8 @@ class Tokeniser:
                          "#": self.hash_handler,
                          "\n": self.newline_handler,
                          "_": self.underscore_handler,
+                         "\t": self.tab_handler,
+                         "-": self.hyphen_handler,
                          }
 
     def tokenise(self):
@@ -64,6 +66,29 @@ class Tokeniser:
             self.markdown[char]()
         else:
             self.current_token.write(char)
+
+    def tab_handler(self) -> None:
+        if self.is_first_line_character():
+            self._end_current_token()
+            self.tokens.append("!TAB")
+
+    def hyphen_handler(self) -> None:
+        if not self.is_first_line_character():
+            self.current_token.write("-")
+        if self.stream.peek(2) == "--":
+            self.insert_bar_token()
+            return
+        if self.stream.peek(1) == " ":
+            self.insert_item_token()
+
+    def insert_item_token(self) -> None:
+        self._end_current_token()
+        self.tokens.append("!LISTITEM")
+
+    def insert_bar_token(self) -> None:
+        self._end_current_token()
+        self.tokens.append("!HBAR")
+        self.stream.read(2)
 
     def is_first_line_character(self) -> bool:
         if self.stream.tell() == 1:
@@ -128,32 +153,33 @@ class Tokeniser:
             self.current_token.write("#")
 
     def check_tag(self) -> str | bool:
-        head = self.stream.tell()
+        cursor = self.stream.tell()
         end = self.stream.seek(0, 2)
-        self.stream.seek(head)
+        self.stream.seek(cursor)
         tag = io.StringIO("#")
         tag.seek(1)
-        for i in range(0, end - head):
+        for i in range(0, end - cursor):
             char = self.stream.peek_char(i)
             if char.isalnum() or char in "-/_":
                 tag.write(char)
             else:
                 break
         tag_string = tag.getvalue()
+        # tag must contain at least one alphabetic character
         if [char for char in tag_string if char.isalpha()]:
             return tag_string
         else:
             return False
 
-    def check_heading(self) -> str | bool:
-        head = self.stream.tell()
+    def check_heading(self) -> str:
+        cursor = self.stream.tell()
         end = self.stream.seek(0, 2)
-        self.stream.seek(head)
+        self.stream.seek(cursor)
         heading = io.StringIO("#")
         heading.seek(1)
-        for i in range(0, end - head):
+        for i in range(0, end - cursor):
             if i > 6:
-                return False
+                return ""
             char = self.stream.peek_char(i)
             if char == "#":
                 heading.write(char)
@@ -163,8 +189,8 @@ class Tokeniser:
                 heading.close()
                 return heading_string
             else:
-                return False
-        return False
+                return ""
+        return ""
 
     def handle_heading(self, heading: str) -> None:
         heading_level = len(heading)
@@ -175,8 +201,10 @@ class Tokeniser:
 markdown = """# Heading 1
 This is \\*escaped\\*, this is **bold** this is *italic*
 ## Heading 2
-This is __bold__ as well
-
+---
+This is __bold__ as well. No thank-you
+- item 1
+- item 2
 ### Heading 3
 This is #tag not a ## # not a tag
 """
