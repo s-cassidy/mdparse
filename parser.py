@@ -43,9 +43,10 @@ class Tokeniser:
                          "-": self.hyphen_handler,
                          }
 
-    def tokenise(self):
+    def tokenise(self) -> list[str]:
         while self.next():
             continue
+        return self.tokens
 
     def next(self) -> int:
         c = self.stream.read(1)
