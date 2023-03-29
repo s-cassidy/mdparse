@@ -50,7 +50,8 @@ class Tokeniser:
     def next(self) -> int:
         c = self.stream.read(1)
         if not c:
-            self.tokens.append(self.current_token.getvalue())
+            self._end_current_token()
+            self.tokens.append("!EOF")
             return 0
         self.process(c)
         return 1
@@ -196,20 +197,3 @@ class Tokeniser:
         heading_level = len(heading)
         self.tokens.append(f"!H{heading_level}")
         self.stream.read(heading_level)
-
-
-markdown = """# Heading 1
-This is \\*escaped\\*, this is **bold** this is *italic*
-## Heading 2
----
-This is __bold__ as well. No thank-you
-- item 1
-- item 2
-### Heading 3
-This is #tag not a ## # not a tag
-"""
-tokeniser = Tokeniser(StringPeek(markdown))
-tokeniser.tokenise()
-tokens = tokeniser.tokens
-for t in tokens:
-    print(t)
