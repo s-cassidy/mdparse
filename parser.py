@@ -118,17 +118,17 @@ class Tokeniser:
             return
         if self.stream.peek() == "*":
             self.stream.read(1)
-            self.tokens.append("!*BOLD")
+            self.tokens.append("**")
         else:
-            self.tokens.append("!*ITALIC")
+            self.tokens.append("*")
 
     def underscore_handler(self) -> None:
         self._end_current_token()
         if self.stream.peek() == "_":
             self.stream.read(1)
-            self.tokens.append("!_BOLD")
+            self.tokens.append("__")
         else:
-            self.tokens.append("!_ITALIC")
+            self.tokens.append("_")
 
     def escape_handler(self) -> None:
         self.current_token.write(self.stream.read(1))
