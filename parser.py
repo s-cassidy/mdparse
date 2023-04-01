@@ -41,6 +41,9 @@ class Tokeniser:
                          "_": self.underscore_handler,
                          "\t": self.tab_handler,
                          "-": self.hyphen_handler,
+                         "[": self.open_sqbracket_handler,
+                         "]": self.close_sqbracket_handler,
+                         "|": self.pipe_handler,
                          }
 
     def tokenise(self) -> list[str]:
@@ -150,7 +153,7 @@ class Tokeniser:
         else:
             self.current_token.write("#")
 
-    def check_tag(self) -> str | bool:
+    def check_tag(self) -> str:
         cursor = self.stream.tell()
         end = self.stream.seek(0, 2)
         self.stream.seek(cursor)
@@ -167,7 +170,7 @@ class Tokeniser:
         if [char for char in tag_string if char.isalpha()]:
             return tag_string
         else:
-            return False
+            return ""
 
     def check_heading(self) -> str:
         cursor = self.stream.tell()
@@ -192,5 +195,25 @@ class Tokeniser:
 
     def handle_heading(self, heading: str) -> None:
         heading_level = len(heading)
-        self.tokens.append(f"!H{heading_level}")
+        self.tokens.append(heading)
         self.stream.read(heading_level)
+
+    def open_sqbracket_handler(self) -> None:
+        self._end_current_token()
+        if self.stream.peek() == "[":
+            self.stream.read(1)
+            self.tokens.append("[[")
+        else:
+            self.tokens.append("[")
+
+    def close_sqbracket_handler(self) -> None:
+        self._end_current_token()
+        if self.stream.peek() == "]":
+            self.stream.read(1)
+            self.tokens.append("]]")
+        else:
+            self.tokens.append("]")
+
+    def pipe_handler(self) -> None:
+        self._end_current_token()
+        self.tokens.append("|")
