@@ -43,7 +43,11 @@ class Tokeniser:
                          "-": self.hyphen_handler,
                          "[": self.open_sqbracket_handler,
                          "]": self.close_sqbracket_handler,
+                         "(": self.open_rdbracket_handler,
+                         ")": self.close_rdbracket_handler,
                          "|": self.pipe_handler,
+                         ">": self.block_quote_handler,
+                         ":": self.colon_handler,
                          }
 
     def tokenise(self) -> list[str]:
@@ -214,6 +218,30 @@ class Tokeniser:
         else:
             self.tokens.append("]")
 
+    def open_rdbracket_handler(self) -> None:
+        self._end_current_token()
+        self.tokens.append("(")
+
+    def close_rdbracket_handler(self) -> None:
+        self._end_current_token()
+        self.tokens.append(")")
+
     def pipe_handler(self) -> None:
         self._end_current_token()
         self.tokens.append("|")
+
+    def block_quote_handler(self) -> None:
+        if self.is_first_line_character():
+            self._end_current_token()
+            self.tokens.append("> ")
+            self.stream.read(1)
+        else:
+            self.current_token.write(">")
+
+    def colon_handler(self) -> None:
+        self._end_current_token()
+        if self.stream.peek() == ":":
+            self.stream.read(1)
+            self.tokens.append("::")
+        else:
+            self.tokens.append(":")
