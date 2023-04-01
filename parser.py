@@ -70,9 +70,8 @@ class Tokeniser:
             self.current_token.write(char)
 
     def tab_handler(self) -> None:
-        if self.is_first_line_character():
-            self._end_current_token()
-            self.tokens.append("!TAB")
+        self._end_current_token()
+        self.tokens.append("\t")
 
     def hyphen_handler(self) -> None:
         if not self.is_first_line_character():
@@ -81,15 +80,14 @@ class Tokeniser:
             self.insert_bar_token()
             return
         if self.stream.peek(1) == " ":
-            self.insert_item_token()
+            self._end_current_token()
+            self.tokens.append("- ")
+            self.stream.read(1)
 
-    def insert_item_token(self) -> None:
-        self._end_current_token()
-        self.tokens.append("!LISTITEM")
 
     def insert_bar_token(self) -> None:
         self._end_current_token()
-        self.tokens.append("!HBAR")
+        self.tokens.append("---")
         self.stream.read(2)
 
     def is_first_line_character(self) -> bool:
@@ -114,7 +112,9 @@ class Tokeniser:
     def star_handler(self) -> None:
         self._end_current_token()
         if self.is_first_line_character() and self.stream.peek(1) == " ":  # list item
-            self.tokens.append("!ITEM")
+            self._end_current_token()
+            self.tokens.append("* ")
+            self.stream.read(1)
             return
         if self.stream.peek() == "*":
             self.stream.read(1)
@@ -135,11 +135,7 @@ class Tokeniser:
 
     def newline_handler(self) -> None:
         self._end_current_token()
-        if self.stream.peek() == "\n":
-            self.stream.read(1)
-            self.tokens.append("!PARA_BREAK")
-        else:
-            self.tokens.append("!NEWLINE")
+        self.tokens.append("\n")
 
     def hash_handler(self) -> None:
         if self.is_first_line_character():
