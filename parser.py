@@ -1,4 +1,6 @@
 import io
+from enum import Enum, auto
+import abc
 
 
 class StringPeek(io.StringIO):
@@ -245,3 +247,74 @@ class Tokeniser:
             self.tokens.append("::")
         else:
             self.tokens.append(":")
+
+
+class Element(Enum):
+    NONE = auto()
+    BOLD = auto()
+    ITALIC = auto()
+    PARAGRAPH = auto()
+    HEADING = auto()
+    TAG = auto()
+    LINE_BREAK = auto()
+    INTERNAL_LINK = auto()
+    EXTERNAL_LINK = auto()
+    BLOCK_QUOTE = auto()
+
+
+class Node(abc.ABC):
+    def __init__(self) -> None:
+        self.children: list[Node] = []
+        self.closed = False
+
+    @property
+    def value(self) -> str:
+        if isinstance(self._value, Element):
+            return self._value.name
+        if isinstance(self._value, str):
+            return self._value
+        else:
+            return ""
+
+    @value.setter
+    @abc.abstractmethod
+    def value(self, val: str | Element) -> None:
+        self._value = val
+
+    def __eq__(self, other):
+        return self.children == other.children and self.value == other.value
+
+
+class Root(Node):
+    def __init__(self) -> None:
+        self.children: list[Node] = []
+        self.closed = False
+        self._value = "ROOT"
+
+    @Node.value.setter
+    def value(self, val: str | Element) -> None:
+        pass
+
+
+class ElementNode(Node):
+    def __init__(self):
+        super().__init__()
+        self._value = Element.NONE
+
+    @Node.value.setter
+    def value(self, val: str | Element) -> None:
+        if not isinstance(val, Element):
+            raise TypeError("ElementNodes should have values of type Element")
+        self._value = val
+
+
+class TextNode(Node):
+    def __init__(self):
+        super().__init__()
+        self.closed = True
+
+    @Node.value.setter
+    def value(self, val: str | Element) -> None:
+        if not isinstance(val, str):
+            raise TypeError("TextNodes should have values of type str")
+        self._value = val
