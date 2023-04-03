@@ -1,7 +1,6 @@
 import io
 from enum import Enum, auto
-import abc
-from typing import Sequence, TypeVar
+from typing import Optional
 
 
 class StringPeek(io.StringIO):
@@ -269,12 +268,40 @@ class NodeType(Enum):
 
 
 class Node:
-    def __init__(self, value: Element | str) -> None:
+    def __init__(self, value: Element | str, parent: "Optional[Node]") -> None:
         self.children: list[Node] = []
         self.node_type: NodeType = NodeType.ELEMENT if isinstance(value, Element) \
             else NodeType.TEXT
-        self.closed = True if isinstance(value, str) else False
         self._value: Element | str = value
+        self.closed = self.is_closed()
+        self.parent: Optional[Node] = parent
+
+    closed_by_default: list[Element] = [
+            Element.TAG,
+            Element.LINE_BREAK,
+            ]
+
+    closers = {
+            Element.HEADING: (Element.LINE_BREAK),
+            Element.BOLD: (Element.LINE_BREAK, Element.BOLD),
+            Element.ITALIC: (Element.LINE_BREAK, Element.ITALIC),
+            Element.PARAGRAPH: (Element.PARAGRAPH),
+            }
+
+    def is_closed(self):
+        if self.node_type == NodeType.TEXT:
+            return True
+        elif self.value in Node.closed_by_default:
+            return True
+        else:
+            return False
+
+    @property
+    def delimiter_stack(self) -> list[str]:
+        if self.parent is not None:
+            return self.parent.delimiter_stack
+        else:
+            return []
 
     @property
     def value(self) -> str:
@@ -285,5 +312,20 @@ class Node:
         else:
             return ""
 
+    def add_child(self, value: Element | str):
+        self.children.append(Node(value, parent=self))
+
+
     def __eq__(self, other):
         return self.children == other.children and self.value == other.value
+
+openers = {"*": "<i>",
+           "**": "<b>",
+           "_": "<i>",
+           "__": "<b>"}
+
+closers = {"*": "</i>",
+           "**": "</b>",
+           "_": "</i>",
+           "__": "</b>"}
+
