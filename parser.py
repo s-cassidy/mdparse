@@ -62,7 +62,7 @@ class Tokeniser:
         c = self.stream.read(1)
         if not c:
             self._end_current_token()
-            self.tokens.append("!EOF")
+            # self.tokens.append("!EOF")
             return 0
         self.process(c)
         return 1
@@ -259,15 +259,90 @@ class Tokeniser:
             self.tokens.append(":")
 
 
+class Element(Enum):
+    ROOT = auto()
+    BOLD = auto()
+    ITALIC = auto()
+    PARAGRAPH = auto()
+    HEADING = auto()
+    TAG = auto()
+    LINE_BREAK = auto()
+    INTERNAL_LINK = auto()
+    EXTERNAL_LINK = auto()
+    BLOCK_QUOTE = auto()
+
+
+class NodeType(Enum):
+    ELEMENT = auto()
+    TEXT = auto()
+
+
+class Node:
+    def __init__(self, value: Element | str, parent: "Optional[Node]") -> None:
+        self.children: list[Node] = []
+        self.node_type: NodeType = NodeType.ELEMENT if isinstance(value, Element) \
+            else NodeType.TEXT
+        self._value: Element | str = value
+        self.closed = self.is_closed()
+        self.parent: Optional[Node] = parent
+
+    closed_by_default: list[Element] = [
+            Element.TAG,
+            Element.LINE_BREAK,
+            ]
+
+    closers = {
+            Element.HEADING: (Element.LINE_BREAK),
+            Element.BOLD: (Element.LINE_BREAK, Element.BOLD),
+            Element.ITALIC: (Element.LINE_BREAK, Element.ITALIC),
+            Element.PARAGRAPH: (Element.PARAGRAPH),
+            }
+
+    def is_closed(self):
+        if self.node_type == NodeType.TEXT:
+            return True
+        elif self.value in Node.closed_by_default:
+            return True
+        else:
+            return False
+
+    @property
+    def delimiter_stack(self) -> list[str]:
+        if self.parent is not None:
+            return self.parent.delimiter_stack
+        else:
+            return []
+
+    @property
+    def value(self) -> str:
+        if isinstance(self._value, Element):
+            return self._value.name
+        if isinstance(self._value, str):
+            return self._value
+        else:
+            return ""
+
+    def add_child(self, value: Element | str):
+        self.children.append(Node(value, parent=self))
+
+
+    def __eq__(self, other):
+        return self.children == other.children and self.value == other.value
+
 openers = {"*": "i",
            "**": "b",
            "_": "i",
            "__": "b",
            "#": "h1",
+           "##": "h2",
+           "###": "h3",
+           "####": "h4",
+           "#####": "h5",
+           "######": "h6",
            "* ": "li",
            "- ": "li",
            "> ": "blockquote",
-           "`": "code",
+           "`" : "code",
            "```": "pre"
            }
 
@@ -309,10 +384,11 @@ def process_delimiters(tokens: list[str]) -> list[str]:
                 closing_tag = f"</{openers[opener_token]}>"
                 matched_tokens[opener_index] = opening_tag
                 matched_tokens[closer_index] = closing_tag
+                continue
 
         # Process opening delimiter
         if token in openers:
-            if ready_for_openers(delimiter_stack):
+            if accept_opener(delimiter_stack, token):
                 delimiter_stack.append((i, token))
         if token == "\n":
             delimiter_stack = [d for d in delimiter_stack if d[1] in "```"]
@@ -321,11 +397,28 @@ def process_delimiters(tokens: list[str]) -> list[str]:
     return processed_tokens
 
 
-def ready_for_openers(stack: list[tuple[int, str]]) -> bool:
+def accept_opener(stack: list[tuple[int, str]], token: str) -> bool:
     """Return True if the delimiter stack is not
-    currently awaiting a closer for a pre-formatted code block"""
-    if stack and stack[-1][1] not in "```":
+    currently awaiting a closer for a pre-formatted code block.
+    Will reject "alternate" delimiters, e.g. if __ is open, reject **."""
+    reject = {
+            "__": "**",
+            "_": "*",
+            "*": "_",
+            "**": "__",
+            }
+    stack_tokens = [token for index, token in stack]
+    if reject.get(token, "not a token") in stack_tokens:
+        return False
+    if stack and stack_tokens[-1] not in "```":
         return True
     if not stack:
         return True
     return False
+
+
+def parse(note: str) -> str:
+    S = StringPeek(note)
+    tokeniser = Tokeniser(S)
+    tokens = tokeniser.tokenise()
+    return process_delimiters(tokens)
