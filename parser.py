@@ -50,6 +50,7 @@ class Tokeniser:
                          "|": self.pipe_handler,
                          ">": self.block_quote_handler,
                          ":": self.colon_handler,
+                         "`": self.backtick_handler,
                          }
 
     def tokenise(self) -> list[str]:
@@ -240,6 +241,15 @@ class Tokeniser:
         else:
             self.current_token.write(">")
 
+    def backtick_handler(self) -> None:
+        if self.stream.peek(2) == 2:
+            self._end_current_token()
+            self.tokens.append("```")
+            self.stream.read(2)
+        else:
+            self._end_current_token()
+            self.tokens.append("`")
+
     def colon_handler(self) -> None:
         self._end_current_token()
         if self.stream.peek() == ":":
@@ -249,24 +259,42 @@ class Tokeniser:
             self.tokens.append(":")
 
 
-openers = {"*": "<i>",
-           "**": "<b>",
-           "_": "<i>",
-           "__": "<b>"}
+openers = {"*": "i",
+           "**": "b",
+           "_": "i",
+           "__": "b",
+           "#": "h1",
+           "* ": "li",
+           "- ": "li",
+           "> ": "blockquote",
+           "`": "code",
+           "```": "pre"
+           }
 
-closers = {"*": "</i>",
-           "**": "</b>",
-           "_": "</i>",
-           "__": "</b>"}
 
 def process_delimiters(tokens: list[str]) -> list[str]:
     delimiter_stack: list[tuple[int, str]] = []
     # closers : openers
-    delimiters = {"*": "*",
-                  "**": "**",
-                  "_": "_",
-                  "__": "__",
+    delimiters = {"*": ["*"],
+                  "**": ["**"],
+                  "_": ["_"],
+                  "__": ["__"],
+                  "\n": [
+                      "#",
+                      "##",
+                      "###",
+                      "####",
+                      "####",
+                      "#####",
+                      "######",
+                      "> ",
+                      "- ",
+                      "* "
+                  ],
+                  "```": ["```"],
+                  "`": ["`"]
                   }
+
     matched_tokens: dict[int, str] = {}
     for i, token in enumerate(tokens):
 
@@ -274,22 +302,30 @@ def process_delimiters(tokens: list[str]) -> list[str]:
         if token in delimiters.keys():
             if not delimiter_stack:
                 pass
-            elif delimiter_stack[-1][1] == delimiters[token]:
+            elif delimiter_stack[-1][1] in delimiters[token]:
                 opener_index, opener_token = delimiter_stack.pop()
-                closer_index, closer_token = (i, token)
-                matched_tokens[opener_index] = openers[opener_token]
-                matched_tokens[closer_index] = closers[closer_token]
-                continue
+                closer_index = i
+                opening_tag = f"<{openers[opener_token]}>"
+                closing_tag = f"</{openers[opener_token]}>"
+                matched_tokens[opener_index] = opening_tag
+                matched_tokens[closer_index] = closing_tag
 
         # Process opening delimiter
-        if token in delimiters.values():
-            if delimiter_stack and delimiter_stack[-1][1] not in "```":
+        if token in openers:
+            if ready_for_openers(delimiter_stack):
                 delimiter_stack.append((i, token))
-                continue
-            if not delimiter_stack:
-                delimiter_stack.append((i, token))
-        elif token == "\n":
+        if token == "\n":
             delimiter_stack = [d for d in delimiter_stack if d[1] in "```"]
     processed_tokens = [matched_tokens[i] if i in matched_tokens else token
                         for i, token in enumerate(tokens)]
     return processed_tokens
+
+
+def ready_for_openers(stack: list[tuple[int, str]]) -> bool:
+    """Return True if the delimiter stack is not
+    currently awaiting a closer for a pre-formatted code block"""
+    if stack and stack[-1][1] not in "```":
+        return True
+    if not stack:
+        return True
+    return False
