@@ -5,10 +5,10 @@ from typing import Optional
 
 class StringPeek(io.StringIO):
     def peek(self, count: int = 1):
-        '''
+        """
         Returns string of <count> characters from the cursor
         without moving the cursor. Count can be negative.
-        '''
+        """
         cursor = self.tell()
         if count < 0:
             self.seek(cursor + count, 0)
@@ -17,10 +17,10 @@ class StringPeek(io.StringIO):
         return peek
 
     def peek_char(self, offset: int = 1) -> str:
-        '''
+        """
         Return character <offset> characters from the cursor
         without moving the cursor. Count can be negative.
-        '''
+        """
         cursor = self.tell()
         self.seek(cursor + offset, 0)
         peek = self.read(1)
@@ -36,22 +36,23 @@ class Tokeniser:
         self.tokens: list[str] = []
         self.stream = stream
         self.current_token = io.StringIO()
-        self.markdown = {"*": self.star_handler,
-                         "\\": self.escape_handler,
-                         "#": self.hash_handler,
-                         "\n": self.newline_handler,
-                         "_": self.underscore_handler,
-                         "\t": self.tab_handler,
-                         "-": self.hyphen_handler,
-                         "[": self.open_sqbracket_handler,
-                         "]": self.close_sqbracket_handler,
-                         "(": self.open_rdbracket_handler,
-                         ")": self.close_rdbracket_handler,
-                         "|": self.pipe_handler,
-                         ">": self.block_quote_handler,
-                         ":": self.colon_handler,
-                         "`": self.backtick_handler,
-                         }
+        self.markdown = {
+            "*": self.star_handler,
+            "\\": self.escape_handler,
+            "#": self.hash_handler,
+            "\n": self.newline_handler,
+            "_": self.underscore_handler,
+            "\t": self.tab_handler,
+            "-": self.hyphen_handler,
+            "[": self.open_sqbracket_handler,
+            "]": self.close_sqbracket_handler,
+            "(": self.open_rdbracket_handler,
+            ")": self.close_rdbracket_handler,
+            "|": self.pipe_handler,
+            ">": self.block_quote_handler,
+            ":": self.colon_handler,
+            "`": self.backtick_handler,
+        }
 
     def tokenise(self) -> list[str]:
         while self.next():
@@ -62,7 +63,7 @@ class Tokeniser:
         c = self.stream.read(1)
         if not c:
             self._end_current_token()
-            # self.tokens.append("!EOF")
+            self.tokens.append("!EOF")
             return 0
         self.process(c)
         return 1
@@ -93,7 +94,6 @@ class Tokeniser:
             self._end_current_token()
             self.tokens.append("- ")
             self.stream.read(1)
-
 
     def insert_bar_token(self) -> None:
         self._end_current_token()
@@ -156,7 +156,7 @@ class Tokeniser:
         if tag := self.check_tag():
             self._end_current_token()
             self.tokens.append(tag)
-            self.stream.relative_seek(len(tag)-1)
+            self.stream.relative_seek(len(tag) - 1)
         else:
             self.current_token.write("#")
 
@@ -261,15 +261,22 @@ class Tokeniser:
 
 class Element(Enum):
     ROOT = auto()
-    BOLD = auto()
-    ITALIC = auto()
+    STRONG = auto()
+    EMP = auto()
     PARAGRAPH = auto()
-    HEADING = auto()
+    H1 = auto()
+    H2 = auto()
+    H3 = auto()
+    H4 = auto()
+    H5 = auto()
+    H6 = auto()
     TAG = auto()
     LINE_BREAK = auto()
     INTERNAL_LINK = auto()
     EXTERNAL_LINK = auto()
     BLOCK_QUOTE = auto()
+    CODE = auto()
+    CODEBLOCK = auto()
 
 
 class NodeType(Enum):
@@ -280,25 +287,19 @@ class NodeType(Enum):
 class Node:
     def __init__(self, value: Element | str, parent: "Optional[Node]") -> None:
         self.children: list[Node] = []
-        self.node_type: NodeType = NodeType.ELEMENT if isinstance(value, Element) \
-            else NodeType.TEXT
-        self._value: Element | str = value
-        self.closed = self.is_closed()
+        self.node_type: NodeType = (
+            NodeType.ELEMENT if isinstance(value, Element) else NodeType.TEXT
+        )
+        self.value: Element | str = value
+        self.closed = self.is_initially_closed()
         self.parent: Optional[Node] = parent
 
     closed_by_default: list[Element] = [
-            Element.TAG,
-            Element.LINE_BREAK,
-            ]
+        Element.TAG,
+        Element.LINE_BREAK,
+    ]
 
-    closers = {
-            Element.HEADING: (Element.LINE_BREAK),
-            Element.BOLD: (Element.LINE_BREAK, Element.BOLD),
-            Element.ITALIC: (Element.LINE_BREAK, Element.ITALIC),
-            Element.PARAGRAPH: (Element.PARAGRAPH),
-            }
-
-    def is_closed(self):
+    def is_initially_closed(self):
         if self.node_type == NodeType.TEXT:
             return True
         elif self.value in Node.closed_by_default:
@@ -313,62 +314,128 @@ class Node:
         else:
             return []
 
-    @property
-    def value(self) -> str:
-        if isinstance(self._value, Element):
-            return self._value.name
-        if isinstance(self._value, str):
-            return self._value
-        else:
-            return ""
-
     def add_child(self, value: Element | str):
         self.children.append(Node(value, parent=self))
 
+    def close_children(self):
+        for child in self.children:
+            if not child.closed:
+                self.close_children(child)
+        self.closed = True
+
+    top_level_elements = [
+            "!H1",
+            "!H2",
+            "!H3",
+            "!H4",
+            "!H5",
+            "!H6",
+            "> ",
+            ]
+
+    def catch_token(self, token: str):
+        if token == "!EOF":
+            if self.children and not self.children[-1].closed:
+                self.children[-1].catch_token(token)
+            elif self.children[-1].value == Element.LINE_BREAK:
+                self.children.pop()
+            self.closed = True
+            return
+        if token in Node.top_level_elements and self.value == Element.ROOT:
+            if self.children and self.children[-1].value == Element.LINE_BREAK:
+                self.children.pop()
+            self.close_children
+            self.add_child(self.evaluate_token(token))
+            return
+        if self.children and not self.children[-1].closed:
+            self.children[-1].catch_token(token)
+        elif token == "!CLOSE":
+            self.closed = True
+        elif token == "!LINE_BREAK":
+            if self.children and self.children[-1].value == Element.LINE_BREAK:
+                self.children.pop()
+                self.close_paragraph(token)
+            else:
+                value = self.evaluate_token(token)
+                self.add_child(value)
+        else:
+            value = self.evaluate_token(token)
+            if self.value == Element.ROOT:
+                if isinstance(value, str) or \
+                        value in [Element.EMP, Element.STRONG]:
+                    if self.children and self.children[-1].value == Element.LINE_BREAK:
+                        self.children.pop()
+                    self.add_child(Element.PARAGRAPH)
+                    self.children[-1].add_child(value)
+                    return
+            self.add_child(value)
+
+    def close_paragraph(self, token) -> None:
+        if self.value == Element.PARAGRAPH and not self.closed:
+            self.closed = True
+            if self.parent:
+                self.parent.add_child(self.evaluate_token(token))
+        else:
+            if self.parent:
+                self.parent.close_paragraph(token)
+
+    def evaluate_token(self, token: str) -> str | Element:
+        if token[0] == "!":
+            try:
+                return Element[token[1:]]
+            except KeyError:
+                return token
+        else:
+            return token
 
     def __eq__(self, other):
         return self.children == other.children and self.value == other.value
 
-openers = {"*": "i",
-           "**": "b",
-           "_": "i",
-           "__": "b",
-           "#": "h1",
-           "##": "h2",
-           "###": "h3",
-           "####": "h4",
-           "#####": "h5",
-           "######": "h6",
-           "* ": "li",
-           "- ": "li",
-           "> ": "blockquote",
-           "`" : "code",
-           "```": "pre"
-           }
+
+openers = {
+    "*": "!EMP",
+    "**": "!STRONG",
+    "_": "!EMP",
+    "__": "!STRONG",
+    "#": "!H1",
+    "##": "!H2",
+    "###": "!H3",
+    "####": "!H4",
+    "#####": "!H5",
+    "######": "!H6",
+    "* ": "!ITEM",
+    "- ": "!ITEM",
+    "> ": "!BLOCKQUOTE",
+    "`": "!CODE",
+    "```": "!CODEBLOCK",
+}
 
 
 def process_delimiters(tokens: list[str]) -> list[str]:
     delimiter_stack: list[tuple[int, str]] = []
+    closed_by_newline = [
+        "#",
+        "##",
+        "###",
+        "####",
+        "####",
+        "#####",
+        "######",
+        "> ",
+        "- ",
+        "* ",
+    ]
     # closers : openers
-    delimiters = {"*": ["*"],
-                  "**": ["**"],
-                  "_": ["_"],
-                  "__": ["__"],
-                  "\n": [
-                      "#",
-                      "##",
-                      "###",
-                      "####",
-                      "####",
-                      "#####",
-                      "######",
-                      "> ",
-                      "- ",
-                      "* "
-                  ],
-                  "```": ["```"],
-                  "`": ["`"]
-                  }
+    delimiters = {
+        "*": ["*"],
+        "**": ["**"],
+        "_": ["_"],
+        "__": ["__"],
+        "\n": closed_by_newline,
+        "\n\n": closed_by_newline,
+        "```": ["```"],
+        "`": ["`"],
+    }
 
     matched_tokens: dict[int, str] = {}
     for i, token in enumerate(tokens):
@@ -380,20 +447,24 @@ def process_delimiters(tokens: list[str]) -> list[str]:
             elif delimiter_stack[-1][1] in delimiters[token]:
                 opener_index, opener_token = delimiter_stack.pop()
                 closer_index = i
-                opening_tag = f"<{openers[opener_token]}>"
-                closing_tag = f"</{openers[opener_token]}>"
+                opening_tag = openers[opener_token]
+                closing_tag = openers[opener_token]
                 matched_tokens[opener_index] = opening_tag
-                matched_tokens[closer_index] = closing_tag
+                matched_tokens[closer_index] = "!CLOSE"
                 continue
 
         # Process opening delimiter
         if token in openers:
             if accept_opener(delimiter_stack, token):
                 delimiter_stack.append((i, token))
-        if token == "\n":
+        if token in "\n\n":
             delimiter_stack = [d for d in delimiter_stack if d[1] in "```"]
-    processed_tokens = [matched_tokens[i] if i in matched_tokens else token
-                        for i, token in enumerate(tokens)]
+            if not delimiter_stack:
+                matched_tokens[i] = "!LINE_BREAK"
+    processed_tokens = [
+        matched_tokens[i] if i in matched_tokens else token
+        for i, token in enumerate(tokens)
+    ]
     return processed_tokens
 
 
@@ -402,11 +473,11 @@ def accept_opener(stack: list[tuple[int, str]], token: str) -> bool:
     currently awaiting a closer for a pre-formatted code block.
     Will reject "alternate" delimiters, e.g. if __ is open, reject **."""
     reject = {
-            "__": "**",
-            "_": "*",
-            "*": "_",
-            "**": "__",
-            }
+        "__": "**",
+        "_": "*",
+        "*": "_",
+        "**": "__",
+    }
     stack_tokens = [token for index, token in stack]
     if reject.get(token, "not a token") in stack_tokens:
         return False
@@ -417,8 +488,25 @@ def accept_opener(stack: list[tuple[int, str]], token: str) -> bool:
     return False
 
 
-def parse(note: str) -> str:
+def parse(note: str) -> Node:
     S = StringPeek(note)
     tokeniser = Tokeniser(S)
     tokens = tokeniser.tokenise()
-    return process_delimiters(tokens)
+    processed_tokens = process_delimiters(tokens)
+    tree = Node(Element.ROOT, parent=None)
+    for token in processed_tokens:
+        tree.catch_token(token)
+    return tree
+
+
+def print_node(Node, depth) -> None:
+    node_string = f'{"---"*depth}{str(Node.value)}'
+    print(node_string)
+    for c in Node.children:
+        print_node(c, depth + 1)
+
+with open('../../vault/test-file.md', 'r', encoding='utf8') as f:
+    S = f.read()
+
+tree = parse(S)
+print_node(tree, 0)
