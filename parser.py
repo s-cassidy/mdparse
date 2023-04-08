@@ -285,7 +285,12 @@ class NodeType(Enum):
 
 
 class Node:
-    def __init__(self, value: Element | str, parent: "Optional[Node]") -> None:
+    def __init__(
+        self,
+        value: Element | str,
+        parent: "Optional[Node]",
+        root: "Optional[Node]"
+    ) -> None:
         self.children: list[Node] = []
         self.node_type: NodeType = (
             NodeType.ELEMENT if isinstance(value, Element) else NodeType.TEXT
@@ -293,6 +298,7 @@ class Node:
         self.value: Element | str = value
         self.closed = self.is_initially_closed()
         self.parent: Optional[Node] = parent
+        self.root: Node = root if root else self
 
     closed_by_default: list[Element] = [
         Element.TAG,
@@ -314,8 +320,47 @@ class Node:
         else:
             return []
 
+    def catch_token(self, token: str):
+
+        # block level elements
+        if token in Node.top_level_elements and self.value == Element.ROOT:
+            self.remove_trailing_line_breaks()
+            self.close_children
+            self.add_child(self.evaluate_token(token))
+            return
+
+        if self.last_child_open():
+            self.children[-1].catch_token(token)
+
+        # special cases
+        elif token == "!CLOSE":
+            self.closed = True
+        elif token == "!LINE_BREAK":
+            if self.children and self.children[-1].value == Element.LINE_BREAK:
+                self.children.pop()
+                self.close_paragraph(token)
+            else:
+                new_value = self.evaluate_token(token)
+                self.add_child(new_value)
+        elif token == "!EOF":
+            self.remove_trailing_line_breaks()
+
+        # text/emp/strong nodes
+        else:
+            new_value = self.evaluate_token(token)
+            if self.value == Element.ROOT:
+                # Ensure main body text is always contained in a paragraph,
+                # never just a child of root.
+                if isinstance(new_value, str) or \
+                        new_value in [Element.EMP, Element.STRONG]:
+                    self.remove_trailing_line_breaks()
+                    self.add_child(Element.PARAGRAPH)
+                    self.root.catch_token(token)
+                    return
+            self.add_child(new_value)
+
     def add_child(self, value: Element | str):
-        self.children.append(Node(value, parent=self))
+        self.children.append(Node(value, parent=self, root=self.root))
 
     def close_children(self):
         for child in self.children:
@@ -333,42 +378,15 @@ class Node:
             "> ",
             ]
 
-    def catch_token(self, token: str):
-        if token == "!EOF":
-            if self.children and not self.children[-1].closed:
-                self.children[-1].catch_token(token)
-            elif self.children[-1].value == Element.LINE_BREAK:
-                self.children.pop()
-            self.closed = True
-            return
-        if token in Node.top_level_elements and self.value == Element.ROOT:
-            if self.children and self.children[-1].value == Element.LINE_BREAK:
-                self.children.pop()
-            self.close_children
-            self.add_child(self.evaluate_token(token))
-            return
+    def remove_trailing_line_breaks(self) -> None:
+        while self.children and self.children[-1].value == Element.LINE_BREAK:
+            self.children.pop()
+
+    def last_child_open(self) -> bool:
         if self.children and not self.children[-1].closed:
-            self.children[-1].catch_token(token)
-        elif token == "!CLOSE":
-            self.closed = True
-        elif token == "!LINE_BREAK":
-            if self.children and self.children[-1].value == Element.LINE_BREAK:
-                self.children.pop()
-                self.close_paragraph(token)
-            else:
-                value = self.evaluate_token(token)
-                self.add_child(value)
+            return True
         else:
-            value = self.evaluate_token(token)
-            if self.value == Element.ROOT:
-                if isinstance(value, str) or \
-                        value in [Element.EMP, Element.STRONG]:
-                    if self.children and self.children[-1].value == Element.LINE_BREAK:
-                        self.children.pop()
-                    self.add_child(Element.PARAGRAPH)
-                    self.children[-1].add_child(value)
-                    return
-            self.add_child(value)
+            return False
 
     def close_paragraph(self, token) -> None:
         if self.value == Element.PARAGRAPH and not self.closed:
@@ -493,7 +511,7 @@ def parse(note: str) -> Node:
     tokeniser = Tokeniser(S)
     tokens = tokeniser.tokenise()
     processed_tokens = process_delimiters(tokens)
-    tree = Node(Element.ROOT, parent=None)
+    tree = Node(Element.ROOT, parent=None, root=None)
     for token in processed_tokens:
         tree.catch_token(token)
     return tree
