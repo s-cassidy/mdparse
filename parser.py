@@ -207,9 +207,12 @@ class Tokeniser:
 
     def open_sqbracket_handler(self) -> None:
         self._end_current_token()
-        if self.stream.peek() == "[":
+        if self.stream.peek() == '[':
+            if self.stream.peek(-1) == "!":
+                self.tokens.append("![[")
+            else:
+                self.tokens.append("[[")
             self.stream.read(1)
-            self.tokens.append("[[")
         else:
             self.tokens.append("[")
 
@@ -218,6 +221,9 @@ class Tokeniser:
         if self.stream.peek() == "]":
             self.stream.read(1)
             self.tokens.append("]]")
+        elif self.stream.peek() == "(":
+            self.stream.read(1)
+            self.tokens.append("](")
         else:
             self.tokens.append("]")
 
@@ -273,6 +279,7 @@ class Element(Enum):
     TAG = auto()
     LINE_BREAK = auto()
     INTERNAL_LINK = auto()
+    EMBED_LINK = auto()
     EXTERNAL_LINK = auto()
     BLOCK_QUOTE = auto()
     CODE = auto()
@@ -299,6 +306,7 @@ class Node:
         self.closed = self.is_initially_closed()
         self.parent: Optional[Node] = parent
         self.root: Node = root if root else self
+        self.link_to: str = ""
 
     closed_by_default: list[Element] = [
         Element.TAG,
@@ -335,6 +343,8 @@ class Node:
         # special cases
         elif token == "!CLOSE":
             self.closed = True
+            if self.value == Element.EXTERNAL_LINK:
+                self.process_external_link()
         elif token == "!LINE_BREAK":
             if self.children and self.children[-1].value == Element.LINE_BREAK:
                 self.children.pop()
@@ -342,6 +352,12 @@ class Node:
             else:
                 new_value = self.evaluate_token(token)
                 self.add_child(new_value)
+        elif token == "!PIPE" and self.value in (Element.INTERNAL_LINK, Element.EMBED_LINK):
+            if self.children:
+                link = "".join(child.value for child in self.children)
+                self.link_to = link
+                self.children = []
+
         elif token == "!EOF":
             self.remove_trailing_line_breaks()
 
@@ -375,7 +391,7 @@ class Node:
             "!H4",
             "!H5",
             "!H6",
-            "> ",
+            "!BLOCK_QUOTE",
             ]
 
     def remove_trailing_line_breaks(self) -> None:
@@ -387,6 +403,12 @@ class Node:
             return True
         else:
             return False
+
+    def process_external_link(self) -> None:
+        child_values = [str(child.value) for child in self.children]
+        break_index = child_values.index("!LINK_BREAK")
+        self.link_to = "".join(child for child in child_values[break_index+1:])
+        self.children = self.children[:break_index]
 
     def close_paragraph(self, token) -> None:
         if self.value == Element.PARAGRAPH and not self.closed:
@@ -409,6 +431,12 @@ class Node:
     def __eq__(self, other):
         return self.children == other.children and self.value == other.value
 
+    def __str__(self):
+        if self.link_to:
+            return f"{str(self.value)} to {self.link_to}"
+        else:
+            return f"{str(self.value)}"
+
 
 openers = {
     "*": "!EMP",
@@ -423,7 +451,10 @@ openers = {
     "######": "!H6",
     "* ": "!ITEM",
     "- ": "!ITEM",
-    "> ": "!BLOCKQUOTE",
+    "> ": "!BLOCK_QUOTE",
+    "[[": "!INTERNAL_LINK",
+    "![[": "!EMBED_LINK",
+    "[": "!EXTERNAL_LINK",
     "`": "!CODE",
     "```": "!CODEBLOCK",
 }
@@ -449,14 +480,22 @@ def process_delimiters(tokens: list[str]) -> list[str]:
         "**": ["**"],
         "_": ["_"],
         "__": ["__"],
+        "]]": ["![[", "[["],
         "\n": closed_by_newline,
         "\n\n": closed_by_newline,
         "```": ["```"],
         "`": ["`"],
+        ")": ["["],
     }
 
-    matched_tokens: dict[int, str] = {}
+    processed_tokens: dict[int, str] = {}
+    external_link_correct = False
     for i, token in enumerate(tokens):
+
+        if token == "](" and delimiter_stack[-1][1] == "[":
+            processed_tokens[i] = "!LINK_BREAK" 
+            external_link_correct = True
+            continue
 
         # Process closing delimiter
         if token in delimiters.keys():
@@ -464,46 +503,64 @@ def process_delimiters(tokens: list[str]) -> list[str]:
                 pass
             elif delimiter_stack[-1][1] in delimiters[token]:
                 opener_index, opener_token = delimiter_stack.pop()
+                if token == ")" and not external_link_correct:
+                    # "unfinshed" hyperlink: remove from stack but don't process
+                    continue
+                if token == ")" and external_link_correct:
+                    external_link_correct = False
                 closer_index = i
                 opening_tag = openers[opener_token]
-                closing_tag = openers[opener_token]
-                matched_tokens[opener_index] = opening_tag
-                matched_tokens[closer_index] = "!CLOSE"
+                processed_tokens[opener_index] = opening_tag
+                processed_tokens[closer_index] = "!CLOSE"
                 continue
 
         # Process opening delimiter
         if token in openers:
-            if accept_opener(delimiter_stack, token):
+            if accept_opener(delimiter_stack, i, token, tokens):
                 delimiter_stack.append((i, token))
         if token in "\n\n":
             delimiter_stack = [d for d in delimiter_stack if d[1] in "```"]
-            if not delimiter_stack:
-                matched_tokens[i] = "!LINE_BREAK"
-    processed_tokens = [
-        matched_tokens[i] if i in matched_tokens else token
+            if not delimiter_stack:  # i.e. we are not in a code block
+                processed_tokens[i] = "!LINE_BREAK"
+
+        if token == "|":
+            if delimiter_stack[-1][1] in "![[":
+                processed_tokens[i] = "!PIPE"
+
+    new_tokens = [
+        processed_tokens[i] if i in processed_tokens else token
         for i, token in enumerate(tokens)
     ]
-    return processed_tokens
+    return new_tokens
 
 
-def accept_opener(stack: list[tuple[int, str]], token: str) -> bool:
+def accept_opener(
+    stack: list[tuple[int, str]],
+    index: int,
+    token: str,
+    tokens: list[str]
+) -> bool:
     """Return True if the delimiter stack is not
     currently awaiting a closer for a pre-formatted code block.
     Will reject "alternate" delimiters, e.g. if __ is open, reject **."""
-    reject = {
+    reject_inside = {
         "__": "**",
         "_": "*",
         "*": "_",
         "**": "__",
     }
     stack_tokens = [token for index, token in stack]
-    if reject.get(token, "not a token") in stack_tokens:
+    if reject_inside.get(token, "not a token") in stack_tokens:
         return False
     if stack and stack_tokens[-1] not in "```":
         return True
     if not stack:
         return True
     return False
+
+# def process_link_token(stack: list[tuple[int, str]], token: str, tokens: list[str]) -> None:
+    
+
 
 
 def parse(note: str) -> Node:
@@ -516,9 +573,8 @@ def parse(note: str) -> Node:
         tree.catch_token(token)
     return tree
 
-
 def print_node(Node, depth) -> None:
-    node_string = f'{"---"*depth}{str(Node.value)}'
+    node_string = f'{"---"*depth}{str(Node)}'
     print(node_string)
     for c in Node.children:
         print_node(c, depth + 1)
