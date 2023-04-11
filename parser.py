@@ -1,6 +1,7 @@
 import io
 from enum import Enum, auto
 from typing import Optional
+from collections import namedtuple
 
 
 class StringPeek(io.StringIO):
@@ -52,6 +53,7 @@ class Tokeniser:
             ">": self.block_quote_handler,
             ":": self.colon_handler,
             "`": self.backtick_handler,
+            "!": self.bang_handler,
         }
 
     def tokenise(self) -> list[str]:
@@ -208,13 +210,16 @@ class Tokeniser:
     def open_sqbracket_handler(self) -> None:
         self._end_current_token()
         if self.stream.peek() == '[':
-            if self.stream.peek(-1) == "!":
-                self.tokens.append("![[")
-            else:
-                self.tokens.append("[[")
+            self.tokens.append("[[")
             self.stream.read(1)
         else:
             self.tokens.append("[")
+
+    def bang_handler(self) -> None:
+        if self.stream.peek(2) == "[[":
+            self._end_current_token()
+            self.tokens.append("![[")
+            self.stream.read(2)
 
     def close_sqbracket_handler(self) -> None:
         self._end_current_token()
@@ -268,7 +273,7 @@ class Tokeniser:
 class Element(Enum):
     ROOT = auto()
     STRONG = auto()
-    EMP = auto()
+    EM = auto()
     PARAGRAPH = auto()
     H1 = auto()
     H2 = auto()
@@ -284,11 +289,8 @@ class Element(Enum):
     BLOCK_QUOTE = auto()
     CODE = auto()
     CODEBLOCK = auto()
-
-
-class NodeType(Enum):
-    ELEMENT = auto()
-    TEXT = auto()
+    HBAR = auto()
+    FRONTMATTER = auto()
 
 
 class Node:
@@ -299,9 +301,6 @@ class Node:
         root: "Optional[Node]"
     ) -> None:
         self.children: list[Node] = []
-        self.node_type: NodeType = (
-            NodeType.ELEMENT if isinstance(value, Element) else NodeType.TEXT
-        )
         self.value: Element | str = value
         self.closed = self.is_initially_closed()
         self.parent: Optional[Node] = parent
@@ -311,10 +310,11 @@ class Node:
     closed_by_default: list[Element] = [
         Element.TAG,
         Element.LINE_BREAK,
+        Element.HBAR,
     ]
 
     def is_initially_closed(self):
-        if self.node_type == NodeType.TEXT:
+        if isinstance(self.value, str):
             return True
         elif self.value in Node.closed_by_default:
             return True
@@ -330,10 +330,18 @@ class Node:
 
     def catch_token(self, token: str):
 
+        if token == "!HBAR" and self.is_frontmatter():
+            if not self.children:
+                self.add_child(Element.FRONTMATTER)
+                return
+            if self.children[0].value == Element.FRONTMATTER:
+                self.close_children()
+                return
+
         # block level elements
         if token in Node.top_level_elements and self.value == Element.ROOT:
             self.remove_trailing_line_breaks()
-            self.close_children
+            self.close_children()
             self.add_child(self.evaluate_token(token))
             return
 
@@ -345,6 +353,9 @@ class Node:
             self.closed = True
             if self.value == Element.EXTERNAL_LINK:
                 self.process_external_link()
+            if self.internal_link_has_no_display_text():
+                link = "".join(str(child) for child in self.children)
+                self.link_to = link
         elif token == "!LINE_BREAK":
             if self.children and self.children[-1].value == Element.LINE_BREAK:
                 self.children.pop()
@@ -354,21 +365,22 @@ class Node:
                 self.add_child(new_value)
         elif token == "!PIPE" and self.value in (Element.INTERNAL_LINK, Element.EMBED_LINK):
             if self.children:
-                link = "".join(child.value for child in self.children)
+                link = "".join(str(child) for child in self.children)
                 self.link_to = link
                 self.children = []
 
         elif token == "!EOF":
             self.remove_trailing_line_breaks()
 
-        # text/emp/strong nodes
+        # text/em/strong nodes
         else:
             new_value = self.evaluate_token(token)
             if self.value == Element.ROOT:
-                # Ensure main body text is always contained in a paragraph,
+                # Ensure main body text is always contained in something
+                # -- fallback to paragraph
                 # never just a child of root.
                 if isinstance(new_value, str) or \
-                        new_value in [Element.EMP, Element.STRONG]:
+                        new_value in [Element.EM, Element.STRONG]:
                     self.remove_trailing_line_breaks()
                     self.add_child(Element.PARAGRAPH)
                     self.root.catch_token(token)
@@ -378,11 +390,19 @@ class Node:
     def add_child(self, value: Element | str):
         self.children.append(Node(value, parent=self, root=self.root))
 
-    def close_children(self):
+    def close_children(self) -> None:
         for child in self.children:
             if not child.closed:
-                self.close_children(child)
+                child.close_children()
         self.closed = True
+
+    def is_frontmatter(self) -> bool:
+        if self.value == Element.ROOT:
+            if not self.children:
+                return True
+            if len(self.children) == 1 and self.children[0].value == Element.FRONTMATTER:
+                return True
+        return False
 
     top_level_elements = [
             "!H1",
@@ -392,11 +412,19 @@ class Node:
             "!H5",
             "!H6",
             "!BLOCK_QUOTE",
+            "!HBAR",
             ]
 
     def remove_trailing_line_breaks(self) -> None:
         while self.children and self.children[-1].value == Element.LINE_BREAK:
             self.children.pop()
+
+    def internal_link_has_no_display_text(self) -> bool:
+        if self.value in (Element.INTERNAL_LINK, Element.EMBED_LINK) \
+                and self.children \
+                and not self.link_to:
+            return True
+        return False
 
     def last_child_open(self) -> bool:
         if self.children and not self.children[-1].closed:
@@ -439,9 +467,9 @@ class Node:
 
 
 openers = {
-    "*": "!EMP",
+    "*": "!EM",
     "**": "!STRONG",
-    "_": "!EMP",
+    "_": "!EM",
     "__": "!STRONG",
     "#": "!H1",
     "##": "!H2",
@@ -493,7 +521,7 @@ def process_delimiters(tokens: list[str]) -> list[str]:
     for i, token in enumerate(tokens):
 
         if token == "](" and delimiter_stack[-1][1] == "[":
-            processed_tokens[i] = "!LINK_BREAK" 
+            processed_tokens[i] = "!LINK_BREAK"
             external_link_correct = True
             continue
 
@@ -526,6 +554,8 @@ def process_delimiters(tokens: list[str]) -> list[str]:
         if token == "|":
             if delimiter_stack[-1][1] in "![[":
                 processed_tokens[i] = "!PIPE"
+        if token == "---" and (not delimiter_stack or delimiter_stack[-1][1] not in "```"):
+            processed_tokens[i] = "!HBAR"
 
     new_tokens = [
         processed_tokens[i] if i in processed_tokens else token
@@ -558,20 +588,6 @@ def accept_opener(
         return True
     return False
 
-# def process_link_token(stack: list[tuple[int, str]], token: str, tokens: list[str]) -> None:
-    
-
-
-
-def parse(note: str) -> Node:
-    S = StringPeek(note)
-    tokeniser = Tokeniser(S)
-    tokens = tokeniser.tokenise()
-    processed_tokens = process_delimiters(tokens)
-    tree = Node(Element.ROOT, parent=None, root=None)
-    for token in processed_tokens:
-        tree.catch_token(token)
-    return tree
 
 def print_node(Node, depth) -> None:
     node_string = f'{"---"*depth}{str(Node)}'
@@ -579,8 +595,86 @@ def print_node(Node, depth) -> None:
     for c in Node.children:
         print_node(c, depth + 1)
 
-with open('../../vault/test-file.md', 'r', encoding='utf8') as f:
-    S = f.read()
 
-tree = parse(S)
-print_node(tree, 0)
+
+def node_to_html(node: Node, stream: io.StringIO, indent_level: int) -> io.StringIO:
+    if node.value in simple_elements:
+        stream.write(f"<{simple_elements[node.value]}>")
+    if isinstance(node.value, str):
+        stream.write(node.value)
+    if node.value in line_breakers:
+        stream.write("\n")
+        stream.write("\t"*indent_level)
+    for child in node.children:
+        node_to_html(child, stream, indent_level + int(node.value in line_breakers))
+    if node.value in simple_pairs:
+        if node.value in line_breakers:
+            stream.write("\n")
+        stream.write(f"</{simple_elements[node.value]}>")
+    if node.value in line_breakers:
+        stream.write("\n")
+    return stream
+
+
+def write_html(tree: Node) -> str:
+    stream = io.StringIO("")
+    node_to_html(tree, stream, 1)
+    return stream.getvalue()
+
+
+simple_pairs: dict[Element, str] = {
+    Element.PARAGRAPH: "p",
+    Element.STRONG: "strong",
+    Element.EM: "em",
+    Element.CODE: "code",
+    Element.H1: "h1",
+    Element.H2: "h2",
+    Element.H3: "h3",
+    Element.H4: "h4",
+    Element.H5: "h5",
+    Element.H6: "h6",
+    Element.BLOCK_QUOTE: "blockquote",
+}
+
+line_breakers = [
+    Element.PARAGRAPH,
+    Element.H1,
+    Element.H2,
+    Element.H3,
+    Element.H4,
+    Element.H5,
+    Element.H6,
+    Element.BLOCK_QUOTE,
+    Element.LINE_BREAK,
+    Element.HBAR,
+]
+
+simple_unpaired: dict[Element, str] = {
+    Element.HBAR: "hr",
+    Element.LINE_BREAK: "br",
+}
+
+simple_elements = simple_pairs | simple_unpaired
+
+Page = namedtuple("Page", "frontmatter content")
+
+def parse(note: str) -> Page:
+    S = StringPeek(note)
+    tokeniser = Tokeniser(S)
+    tokens = tokeniser.tokenise()
+    processed_tokens = process_delimiters(tokens)
+    tree = Node(Element.ROOT, parent=None, root=None)
+    for token in processed_tokens:
+        tree.catch_token(token)
+    frontmatter = None
+    if tree.children[0].value == Element.FRONTMATTER:
+        frontmatter = tree.children.pop(0)
+    content = write_html(tree)
+    output = Page(frontmatter, content)
+    return output
+
+
+# with open('../../vault/test-file.md', 'r', encoding='utf8') as f:
+#     S = f.read()
+# tree = parse(S)
+# output = write_html(tree)
