@@ -598,7 +598,11 @@ def print_node(Node, depth) -> None:
 
 
 def node_to_html(node: Node, stream: io.StringIO, indent_level: int) -> io.StringIO:
-    if node.value in simple_elements:
+    if node.value == Element.INTERNAL_LINK:
+        stream.write(f"<a href={title_to_url(node.link_to)}>")
+    if node.value == Element.EXTERNAL_LINK:
+        stream.write(f"<a href={node.link_to}>")
+    elif node.value in simple_elements:
         stream.write(f"<{simple_elements[node.value]}>")
     if isinstance(node.value, str):
         stream.write(node.value)
@@ -607,13 +611,18 @@ def node_to_html(node: Node, stream: io.StringIO, indent_level: int) -> io.Strin
         stream.write("\t"*indent_level)
     for child in node.children:
         node_to_html(child, stream, indent_level + int(node.value in line_breakers))
-    if node.value in simple_pairs:
+    if node.value in paired_tags:
         if node.value in line_breakers:
             stream.write("\n")
-        stream.write(f"</{simple_elements[node.value]}>")
+        stream.write(f"</{paired_tags[node.value]}>")
     if node.value in line_breakers:
         stream.write("\n")
     return stream
+
+
+def title_to_url(title:str) -> str:
+    return title.replace(' ', '-')
+
 
 
 def write_html(tree: Node) -> str:
@@ -622,7 +631,7 @@ def write_html(tree: Node) -> str:
     return stream.getvalue()
 
 
-simple_pairs: dict[Element, str] = {
+paired_tags: dict[Element, str] = {
     Element.PARAGRAPH: "p",
     Element.STRONG: "strong",
     Element.EM: "em",
@@ -633,6 +642,7 @@ simple_pairs: dict[Element, str] = {
     Element.H4: "h4",
     Element.H5: "h5",
     Element.H6: "h6",
+    Element.INTERNAL_LINK: "a",
     Element.BLOCK_QUOTE: "blockquote",
 }
 
@@ -654,7 +664,7 @@ simple_unpaired: dict[Element, str] = {
     Element.LINE_BREAK: "br",
 }
 
-simple_elements = simple_pairs | simple_unpaired
+simple_elements = paired_tags | simple_unpaired
 
 Page = namedtuple("Page", "frontmatter content")
 
