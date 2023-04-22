@@ -1,7 +1,9 @@
 import io
 from enum import Enum, auto
+import string
 from typing import Optional
 from collections import namedtuple
+from flask import url_for
 
 
 class StringPeek(io.StringIO):
@@ -44,6 +46,7 @@ class Tokeniser:
             "\n": self.newline_handler,
             "_": self.underscore_handler,
             "\t": self.tab_handler,
+            " ": self.space_handler,
             "-": self.hyphen_handler,
             "[": self.open_sqbracket_handler,
             "]": self.close_sqbracket_handler,
@@ -85,6 +88,13 @@ class Tokeniser:
     def tab_handler(self) -> None:
         self._end_current_token()
         self.tokens.append("\t")
+
+    def space_handler(self) -> None:
+        if self.is_start_of_line and self.stream.peek(3) == "   ":
+            self.stream.read(3)
+            self.tab_handler()
+        else:
+            self.current_token.write(" ")
 
     def hyphen_handler(self) -> None:
         if not self.is_first_line_character():
@@ -287,10 +297,14 @@ class Element(Enum):
     EMBED_LINK = auto()
     EXTERNAL_LINK = auto()
     BLOCK_QUOTE = auto()
+    ITEM = auto()
+    UNORDERED_LIST = auto()
+    ORDERED_LIST = auto()
     CODE = auto()
     CODEBLOCK = auto()
     HBAR = auto()
     FRONTMATTER = auto()
+    IMAGE = auto()
 
 
 class Node:
@@ -306,6 +320,11 @@ class Node:
         self.parent: Optional[Node] = parent
         self.root: Node = root if root else self
         self.link_to: str = ""
+        self.list_indent = -1
+        self.tab_count = 0
+        self.start_new_list = False
+        self.image_width: int = ""
+        self.image_height: int = ""
 
     closed_by_default: list[Element] = [
         Element.TAG,
@@ -321,13 +340,9 @@ class Node:
         else:
             return False
 
-    @property
-    def delimiter_stack(self) -> list[str]:
-        if self.parent is not None:
-            return self.parent.delimiter_stack
-        else:
-            return []
-
+    def __repr__(self) -> str:
+        return str(self.value)
+    
     def catch_token(self, token: str):
 
         if token == "!HBAR" and self.is_frontmatter():
@@ -337,6 +352,16 @@ class Node:
             if self.children[0].value == Element.FRONTMATTER:
                 self.close_children()
                 return
+
+        if token == "!TAB" and self.value == Element.ROOT:
+            self.tab_count += 1
+            return
+
+        if token == "!ITEM" and self.value == Element.ROOT:
+            correct_list = self.find_correct_list()
+            correct_list.add_child(Element.ITEM)
+            self.root.tab_count = 0
+            return
 
         # block level elements
         if token in Node.top_level_elements and self.value == Element.ROOT:
@@ -355,7 +380,38 @@ class Node:
                 self.process_external_link()
             if self.internal_link_has_no_display_text():
                 link = "".join(str(child) for child in self.children)
+                print(link)
                 self.link_to = link
+            if self.value == Element.INTERNAL_LINK and self.link_to[-4:] == ".jpg":
+                self.value = Element.IMAGE
+                if self.children:
+                    child_string = "".join([child.value for child in self.children])
+                    self.image_width, _, self.image_height = child_string.partition("x")
+                    if not (self.is_digits(self.image_width) and self.is_digits(self.image_height)):
+                        self.image_width, self.image_height = "",""
+                    self.children = []
+        # elif token == "!ITEM":
+        #     if self.tab_count == self.list_indent + 1:
+        #         self.add_child(Element.UNORDERED_LIST)
+        #         self.children[-1].list_indent = self.list_indent + 1
+        #         self.children[-1].add_child(Element.ITEM)
+        #     if self.tab_count < self.list_indent:
+        #         self.closed = True
+        #         self.root.catch_token(token)
+        #     else:
+        #         self.add_child(Element.ITEM)
+                # if self.tab_count == self.list_indent + 1 and self.children[-1].value != Element.UNORDERED_LIST:
+                #     self.add_child(Element.UNORDERED_LIST)
+                #     self.children[-1].list_indent = self.list_indent + 1
+                #     self.children[-1].tab_count = self.list_indent + 1
+                #     self.root.catch_token(token)
+                # elif self.tab_count < self.list_indent:
+                #     self.closed = True
+                #     self.root.catch_token(token)
+                # elif self.tab_count == self.list_indent:
+                #     self.add_child(Element.ITEM)
+                self.tab_count = 0
+
         elif token == "!LINE_BREAK":
             if self.children and self.children[-1].value == Element.LINE_BREAK:
                 self.children.pop()
@@ -387,6 +443,34 @@ class Node:
                     return
             self.add_child(new_value)
 
+    def find_correct_list(self) -> "Node":
+        if self.tab_count == 0:
+            if self.children[-1].value == Element.UNORDERED_LIST:
+                correct_list = self.children[-1]
+            else:
+                self.add_child(Element.UNORDERED_LIST)
+                correct_list = self.children[-1]
+        if self.tab_count > 0:
+            current_node = self
+            searching = True
+            while searching:
+                if current_node.children and current_node.children[-1].value == Element.UNORDERED_LIST:
+                    current_node = current_node.children[-1]
+                else:
+                    current_node.add_child(Element.UNORDERED_LIST)
+                    current_node.children[-1].list_indent = current_node.list_indent + 1
+                if self.tab_count == current_node.list_indent:
+                    correct_list = current_node
+                    searching = False
+        return correct_list
+
+
+    def is_digits(self, s: str) -> bool:
+        for c in s:
+            if c not in string.digits:
+                return False
+        return True
+
     def add_child(self, value: Element | str):
         self.children.append(Node(value, parent=self, root=self.root))
 
@@ -403,6 +487,16 @@ class Node:
             if len(self.children) == 1 and self.children[0].value == Element.FRONTMATTER:
                 return True
         return False
+
+    def handle_tab_in_list(self) -> None:
+        if self.value == Element.UNORDERED_LIST:
+            self.start_new_list = True
+
+
+    def handle_list_item(self) -> None:
+        if self.value == Element.UNORDERED_LIST:
+            pass
+            
 
     top_level_elements = [
             "!H1",
@@ -554,6 +648,8 @@ def process_delimiters(tokens: list[str]) -> list[str]:
         if token == "|":
             if delimiter_stack[-1][1] in "![[":
                 processed_tokens[i] = "!PIPE"
+        if token == "\t" and (not delimiter_stack or delimiter_stack[-1][1] not in "```"):
+            processed_tokens[i] = "!TAB"
         if token == "---" and (not delimiter_stack or delimiter_stack[-1][1] not in "```"):
             processed_tokens[i] = "!HBAR"
 
@@ -600,8 +696,10 @@ def print_node(Node, depth) -> None:
 def node_to_html(node: Node, stream: io.StringIO, indent_level: int) -> io.StringIO:
     if node.value == Element.INTERNAL_LINK:
         stream.write(f"<a href={title_to_url(node.link_to)}>")
-    if node.value == Element.EXTERNAL_LINK:
+    elif node.value == Element.EXTERNAL_LINK:
         stream.write(f"<a href={node.link_to}>")
+    elif node.value == Element.IMAGE:
+        stream.write(generate_image_tag(node))
     elif node.value in simple_elements:
         stream.write(f"<{simple_elements[node.value]}>")
     if isinstance(node.value, str):
@@ -609,8 +707,10 @@ def node_to_html(node: Node, stream: io.StringIO, indent_level: int) -> io.Strin
     if node.value in line_breakers:
         stream.write("\n")
         stream.write("\t"*indent_level)
+
     for child in node.children:
         node_to_html(child, stream, indent_level + int(node.value in line_breakers))
+
     if node.value in paired_tags:
         if node.value in line_breakers:
             stream.write("\n")
@@ -623,6 +723,13 @@ def node_to_html(node: Node, stream: io.StringIO, indent_level: int) -> io.Strin
 def title_to_url(title:str) -> str:
     return title.replace(' ', '-')
 
+def generate_image_tag(node: Node) -> str:
+    image = node.link_to
+    return (
+        f'<img src="{url_for("static", filename="attachments/"+image)}" style='
+        f'"{"width:"+node.image_width+"px" if node.image_width else ""}'
+        f'{";height:"+node.image_height+"px" if node.image_height else ""}">'
+    )
 
 
 def write_html(tree: Node) -> str:
@@ -643,7 +750,10 @@ paired_tags: dict[Element, str] = {
     Element.H5: "h5",
     Element.H6: "h6",
     Element.INTERNAL_LINK: "a",
+    Element.EXTERNAL_LINK: "a",
     Element.BLOCK_QUOTE: "blockquote",
+    Element.UNORDERED_LIST: "ul",
+    Element.ITEM: "li",
 }
 
 line_breakers = [
@@ -656,6 +766,8 @@ line_breakers = [
     Element.H6,
     Element.BLOCK_QUOTE,
     Element.LINE_BREAK,
+    Element.ITEM,
+    Element.UNORDERED_LIST,
     Element.HBAR,
 ]
 
@@ -680,11 +792,17 @@ def parse(note: str) -> Page:
     if tree.children[0].value == Element.FRONTMATTER:
         frontmatter = tree.children.pop(0)
     content = write_html(tree)
+    if __name__ == "__main__":
+        print(processed_tokens)
+        print("\n\n")
+        print_node(tree, 1)
+        print("\n\n")
+        print(content)
     output = Page(frontmatter, content)
     return output
 
 
-# with open('../../vault/test-file.md', 'r', encoding='utf8') as f:
-#     S = f.read()
-# tree = parse(S)
-# output = write_html(tree)
+if __name__ == "__main__":
+    with open('../../vault/test file.md', 'r', encoding='utf8') as f:
+        S = f.read()
+    tree = parse(S)
