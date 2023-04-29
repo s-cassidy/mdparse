@@ -92,7 +92,16 @@ class Tokeniser:
         self.tokens.append("\t")
 
     def handle_numbered_list(self):
-        pass
+        peek = 0
+        while self.stream.peek_char(peek) in string.digits:
+            peek += 1
+        if self.stream.peek(peek+2)[-2:] == ". ":
+            self.tokens.append("!" + self.stream.peek(peek+2))
+            self.stream.read(peek+2)
+        else:
+            self.current_token.write(self.stream.peek_char(0))
+
+
 
     def space_handler(self) -> None:
         if self.stream.peek(3) == "   ":
