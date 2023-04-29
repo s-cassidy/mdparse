@@ -82,6 +82,8 @@ class Tokeniser:
     def process(self, char) -> None:
         if char in self.markdown:
             self.markdown[char]()
+        elif self.is_first_line_character() and char in string.digits:
+            self.handle_numbered_list()
         else:
             self.current_token.write(char)
 
@@ -89,8 +91,11 @@ class Tokeniser:
         self._end_current_token()
         self.tokens.append("\t")
 
+    def handle_numbered_list(self):
+        pass
+
     def space_handler(self) -> None:
-        if self.is_start_of_line and self.stream.peek(3) == "   ":
+        if self.stream.peek(3) == "   ":
             self.stream.read(3)
             self.tab_handler()
         else:
@@ -127,7 +132,7 @@ class Tokeniser:
     def is_start_of_line(self) -> bool:
         if self.stream.tell() == 1:
             return True
-        if self.stream.peek_char(-1) == "\n":
+        if self.stream.peek_char(-2) == "\n":
             return True
         return False
 
@@ -320,11 +325,11 @@ class Node:
         self.parent: Optional[Node] = parent
         self.root: Node = root if root else self
         self.link_to: str = ""
-        self.list_indent = -1
+        self.list_indent = 0
         self.tab_count = 0
         self.start_new_list = False
-        self.image_width: int = ""
-        self.image_height: int = ""
+        self.image_width: str = ""
+        self.image_height: str = ""
 
     closed_by_default: list[Element] = [
         Element.TAG,
@@ -382,35 +387,14 @@ class Node:
                 link = "".join(str(child) for child in self.children)
                 print(link)
                 self.link_to = link
-            if self.value == Element.INTERNAL_LINK and self.link_to[-4:] == ".jpg":
+            if self.value == Element.EMBED_LINK and self.link_to[-4:] in [".jpg", ".png"]:
                 self.value = Element.IMAGE
                 if self.children:
-                    child_string = "".join([child.value for child in self.children])
+                    child_string = "".join([str(child.value) for child in self.children])
                     self.image_width, _, self.image_height = child_string.partition("x")
                     if not (self.is_digits(self.image_width) and self.is_digits(self.image_height)):
                         self.image_width, self.image_height = "",""
                     self.children = []
-        # elif token == "!ITEM":
-        #     if self.tab_count == self.list_indent + 1:
-        #         self.add_child(Element.UNORDERED_LIST)
-        #         self.children[-1].list_indent = self.list_indent + 1
-        #         self.children[-1].add_child(Element.ITEM)
-        #     if self.tab_count < self.list_indent:
-        #         self.closed = True
-        #         self.root.catch_token(token)
-        #     else:
-        #         self.add_child(Element.ITEM)
-                # if self.tab_count == self.list_indent + 1 and self.children[-1].value != Element.UNORDERED_LIST:
-                #     self.add_child(Element.UNORDERED_LIST)
-                #     self.children[-1].list_indent = self.list_indent + 1
-                #     self.children[-1].tab_count = self.list_indent + 1
-                #     self.root.catch_token(token)
-                # elif self.tab_count < self.list_indent:
-                #     self.closed = True
-                #     self.root.catch_token(token)
-                # elif self.tab_count == self.list_indent:
-                #     self.add_child(Element.ITEM)
-                self.tab_count = 0
 
         elif token == "!LINE_BREAK":
             if self.children and self.children[-1].value == Element.LINE_BREAK:
@@ -726,9 +710,8 @@ def title_to_url(title:str) -> str:
 def generate_image_tag(node: Node) -> str:
     image = node.link_to
     return (
-        f'<img src="{url_for("static", filename="attachments/"+image)}" style='
-        f'"{"width:"+node.image_width+"px" if node.image_width else ""}'
-        f'{";height:"+node.image_height+"px" if node.image_height else ""}">'
+        f'<img src="{url_for("vault.attachments", filename=image)}" style='
+            'max-width:100%;height:auto'
     )
 
 
