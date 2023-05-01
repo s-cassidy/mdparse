@@ -279,7 +279,7 @@ def print_node(Node, depth) -> None:
 if __name__ == '__main__':
     import tokeniser
 
-    with open('../../vault/test file.md', 'r', encoding='utf8') as f:
+    with open('../website/static/vault/202210260827 Christmas dinner ideas.md', 'r', encoding='utf8') as f:
         note = f.read()
     S = tokeniser.StringPeek(note)
     tokens = tokeniser.process_tokens(tokeniser.Tokeniser(S).tokenise())

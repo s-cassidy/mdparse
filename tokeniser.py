@@ -108,6 +108,7 @@ class Tokeniser:
     def hyphen_handler(self) -> None:
         if not self.is_first_line_character():
             self.current_token.write("-")
+            return
         if self.stream.peek(2) == "--":
             self.insert_bar_token()
             return
@@ -369,10 +370,10 @@ def process_tokens(tokens: list[str]) -> list[str]:
             if not delimiter_stack:
                 pass
             elif should_close(token, delimiter_stack):
-                opener_index, opener_token = delimiter_stack.pop()
                 if token == ")" and not external_link_correct:
                     # "unfinshed" hyperlink: remove from stack but don't process
                     continue
+                opener_index, opener_token = delimiter_stack.pop()
                 if token == ")" and external_link_correct:
                     external_link_correct = False
                 closer_index = i
@@ -396,7 +397,7 @@ def process_tokens(tokens: list[str]) -> list[str]:
                 processed_tokens[i] = "!LINE_BREAK"
 
         if token == "|":
-            if delimiter_stack[-1][1] in "![[":
+            if "[[" in delimiter_stack[-1][1]:
                 processed_tokens[i] = "!PIPE"
         if token == "\t" and (not delimiter_stack or delimiter_stack[-1][1] not in "```"):
             processed_tokens[i] = "!TAB"
@@ -425,8 +426,10 @@ def accept_opener(
         "*": "_",
         "**": "__",
     }
-    stack_tokens = [token for index, token in stack]
+    stack_tokens = [t for index, t in stack]
     if reject_inside.get(token, "not a token") in stack_tokens:
+        return False
+    if stack and stack_tokens[-1] == "[" and token not in ["*", "**", "__", "_"]:
         return False
     if stack and stack_tokens[-1] not in "```":
         return True
@@ -436,7 +439,7 @@ def accept_opener(
 
 
 if __name__ == '__main__':
-    with open('../../vault/test file.md', 'r', encoding='utf8') as f:
+    with open('../website/static/vault/202210260827 Christmas dinner ideas.md', 'r', encoding='utf8') as f:
         note = f.read()
     S = StringPeek(note)
     tokeniser = Tokeniser(S)
