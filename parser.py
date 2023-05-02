@@ -1,10 +1,12 @@
 import io
-from typing import Optional
 from flob.note import tree, tokeniser
 from collections import namedtuple
 from flask import url_for
+from pathlib import Path
+import os
 
 Element = tree.Element
+SOURCE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
 
 
 def node_to_html(node: tree.Node, stream: io.StringIO, indent_level: int) -> io.StringIO:
@@ -106,14 +108,25 @@ Page = namedtuple("Page", "frontmatter content")
 def parse(note: str) -> Page:
     S = tokeniser.StringPeek(note)
     tokens = tokeniser.Tokeniser(S).tokenise()
+    with open(SOURCE_DIR / "output/tokens-raw.txt", "w", encoding="utf8") as f:
+        for t in tokens:
+            f.write(t + "\n")
     processed_tokens = tokeniser.process_tokens(tokens)
+    with open(SOURCE_DIR / "output/tokens-processed.txt", "w", encoding="utf8") as f:
+        for t in processed_tokens:
+            f.write(t + "\n")
     note_tree = tree.Node(Element.ROOT, parent=None, root=None)
     for token in processed_tokens:
         note_tree.catch_token(token)
+
+    with open(SOURCE_DIR / "output/tree.txt", "w", encoding="utf8") as f:
+        tree.print_node(note_tree, 0, f)
     frontmatter = None
     if note_tree.children[0].value == Element.FRONTMATTER:
         frontmatter = note_tree.children.pop(0)
     content = write_html(note_tree)
+    with open(SOURCE_DIR / "output/content.html", "w", encoding="utf8") as f:
+        f.write(content)
     if __name__ == "__main__":
         print(processed_tokens)
         print("\n\n")

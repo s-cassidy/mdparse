@@ -1,5 +1,6 @@
 from enum import Enum, auto
 from typing import Optional
+from sys import stdout
 import string
 
 
@@ -104,7 +105,6 @@ class Node:
                 self.process_external_link()
             if self.internal_link_has_no_display_text():
                 link = "".join(str(child) for child in self.children)
-                print(link)
                 self.link_to = link
             if self.value == Element.EMBED_LINK and self.link_to[-4:] in [".jpg", ".png"]:
                 self.value = Element.IMAGE
@@ -178,10 +178,6 @@ class Node:
                     correct_list = current_node
                     searching = False
                 try_count += 1
-                print_node(self, 0)
-                print(f"Current node: {current_node}")
-                print(f"Indent level: {self.list_indent}")
-                print(f"tab count: {self.tab_count}")
         return correct_list
 
     def is_digits(self, s: str) -> bool:
@@ -269,17 +265,17 @@ class Node:
             return f"{str(self.value)}"
 
 
-def print_node(Node, depth) -> None:
+def print_node(Node, depth, stream=stdout) -> None:
     node_string = f'{"---"*depth}{str(Node)}'
-    print(node_string)
+    print(node_string, file=stream)
     for c in Node.children:
-        print_node(c, depth + 1)
+        print_node(c, depth + 1, stream=stream)
 
 
 if __name__ == '__main__':
     import tokeniser
 
-    with open('../website/static/vault/202210260827 Christmas dinner ideas.md', 'r', encoding='utf8') as f:
+    with open('../website/static/vault/202210260827 christmas dinner ideas.md', 'r', encoding='utf8') as f:
         note = f.read()
     S = tokeniser.StringPeek(note)
     tokens = tokeniser.process_tokens(tokeniser.Tokeniser(S).tokenise())
