@@ -388,7 +388,8 @@ class DelimiterProcessor:
         self.external_link_correct = False
         self.tokens = tokens
 
-    def process_tokens(self, tokens: list[str]) -> list[str]:
+    def process_tokens(self) -> list[str]:
+        tokens = self.tokens
         for i, token in enumerate(tokens):
 
             if token == "](" and self.delimiter_stack.peek() == "[":
@@ -415,14 +416,14 @@ class DelimiterProcessor:
 
             if token == "|":
                 if "[[" in self.delimiter_stack.peek():
-                    processed_tokens[i] = "!PIPE"
+                    self.processed_tokens[i] = "!PIPE"
             if token == "\t" and self.delimiter_stack.not_in_codeblock():
-                processed_tokens[i] = "!TAB"
+                self.processed_tokens[i] = "!TAB"
             if token == "---" and self.delimiter_stack.not_in_codeblock():
-                processed_tokens[i] = "!HBAR"
+                self.processed_tokens[i] = "!HBAR"
 
         new_tokens = [
-            processed_tokens[i] if i in processed_tokens else token
+            self.processed_tokens[i] if i in self.processed_tokens else token
             for i, token in enumerate(tokens)
         ]
         return new_tokens

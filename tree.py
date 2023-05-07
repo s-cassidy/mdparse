@@ -121,9 +121,16 @@ class Node:
             if self.children and self.children[-1].value == Element.LINE_BREAK:
                 self.children.pop()
                 self.close_paragraph(token)
+                return
+            if self.value in [Element.UNORDERED_LIST, Element.ORDERED_LIST]:
+                self.root.close_children()
+                return
+            if self.value == Element.PARAGRAPH:
+                self.close_paragraph(token)
             else:
                 new_value = self.evaluate_token(token)
                 self.add_child(new_value)
+
         elif token == "!PIPE" and self.value in (Element.INTERNAL_LINK, Element.EMBED_LINK):
             if self.children:
                 link = "".join(str(child) for child in self.children)
@@ -240,7 +247,7 @@ class Node:
     def close_paragraph(self, token) -> None:
         if self.value == Element.PARAGRAPH and not self.closed:
             self.closed = True
-            if self.parent:
+            if self.parent and token != "!LINE_BREAK":
                 self.parent.add_child(self.evaluate_token(token))
         else:
             if self.parent:

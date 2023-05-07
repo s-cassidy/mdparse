@@ -14,6 +14,11 @@ def node_to_html(node: tree.Node, stream: io.StringIO, indent_level: int) -> io.
         stream.write(f"<a href={title_to_url(node.link_to)}>")
     elif node.value == Element.EXTERNAL_LINK:
         stream.write(f"<a href={node.link_to}>")
+    elif node.value == Element.INTERNAL_LINK:
+        stream.write("<div class='embed'>\n"
+                     "content here"
+                     f"<a href={title_to_url(node.link_to)}Link</a>"
+                     "</div>")
     elif node.value == Element.IMAGE:
         stream.write(generate_image_tag(node))
     elif node.value == Element.ORDERED_LIST:
@@ -111,7 +116,7 @@ def parse(note: str) -> Page:
     with open(SOURCE_DIR / "output/tokens-raw.txt", "w", encoding="utf8") as f:
         for t in tokens:
             f.write(t + "\n")
-    processed_tokens = tokeniser.process_tokens(tokens)
+    processed_tokens = tokeniser.DelimiterProcessor(tokens).process_tokens()
     with open(SOURCE_DIR / "output/tokens-processed.txt", "w", encoding="utf8") as f:
         for t in processed_tokens:
             f.write(t + "\n")
