@@ -1,5 +1,6 @@
 import io
 import string
+from collections import deque
 
 
 class StringPeek(io.StringIO):
@@ -35,7 +36,7 @@ class Tokeniser:
         self.tokens: list[str] = []
         self.stream = stream
         self.current_token = io.StringIO()
-        self.markdown = {
+        self.markdown_handlers = {
             "*": self.star_handler,
             "\\": self.escape_handler,
             "#": self.hash_handler,
@@ -76,8 +77,8 @@ class Tokeniser:
         self.current_token = io.StringIO()
 
     def process(self, char) -> None:
-        if char in self.markdown:
-            self.markdown[char]()
+        if char in self.markdown_handlers:
+            self.markdown_handlers[char]()
         elif self.is_first_line_character() and char in string.digits:
             self.handle_numbered_list()
         else:
@@ -123,6 +124,10 @@ class Tokeniser:
         self.stream.read(2)
 
     def is_first_line_character(self) -> bool:
+        '''
+        Returns True if character is the first non-whitespace character
+        on a line.
+        '''
         if self.stream.tell() == 1:
             return True
         for i in range(2, self.stream.tell()):
@@ -135,6 +140,9 @@ class Tokeniser:
         return True  # This covers the case of being on the first line
 
     def is_start_of_line(self) -> bool:
+        '''
+        Returns True if character is the first character on the line.
+        '''
         if self.stream.tell() == 1:
             return True
         if self.stream.peek_char(-2) == "\n":
@@ -317,6 +325,7 @@ def get_opener(token: str) -> str:
         return openers[token]
     if token[-2:] == ". ":
         return f"!OLI_{token[:-2]}"
+    return ""
 
 
 closed_by_newline = [
@@ -345,97 +354,122 @@ delimiters = {
 }
 
 
-def should_close(token: str, stack: list[tuple[int, str]]) -> bool:
-    if stack[-1][1] in delimiters[token]:
-        return True
-    if ". " == stack[-1][1][-2:] and token in "\n\n":
-        return True
-    return False
+class DelimiterStack(deque):
+    def peek(self) -> str | None:
+        try:
+            return self[-1][1]
+        except IndexError:
+            return None
+
+    def pop(self):
+        try:
+            return deque.pop(self)
+        except IndexError:
+            return None
+
+    def should_close(self, token: str) -> bool:
+        if self.peek() in delimiters[token]:
+            return True
+        # Special case -- numbered lists are not identified by a single token
+        # but any of the form "%d. ". However, they are still "closed by newline"
+        if top := self.peek():
+            if ". " == top[-2:] and token in "\n\n":
+                return True
+        return False
+
+    def not_in_codeblock(self):
+        return True if self.peek() not in ["```", "`"] else False
 
 
-def process_tokens(tokens: list[str]) -> list[str]:
-    delimiter_stack: list[tuple[int, str]] = []
+class DelimiterProcessor:
+    def __init__(self, tokens: list[str]):
+        self.delimiter_stack = DelimiterStack()
+        self.processed_tokens: dict[int, str] = {}
+        self.external_link_correct = False
+        self.tokens = tokens
 
-    processed_tokens: dict[int, str] = {}
-    external_link_correct = False
-    for i, token in enumerate(tokens):
+    def process_tokens(self, tokens: list[str]) -> list[str]:
+        for i, token in enumerate(tokens):
 
-        if token == "](" and delimiter_stack[-1][1] == "[":
-            processed_tokens[i] = "!LINK_BREAK"
-            external_link_correct = True
-            continue
-
-        # Process closing delimiter
-        if token in delimiters.keys():
-            if not delimiter_stack:
-                pass
-            elif should_close(token, delimiter_stack):
-                if token == ")" and not external_link_correct:
-                    # "unfinshed" hyperlink: remove from stack but don't process
-                    continue
-                opener_index, opener_token = delimiter_stack.pop()
-                if token == ")" and external_link_correct:
-                    external_link_correct = False
-                closer_index = i
-                opening_tag = get_opener(opener_token)
-                processed_tokens[opener_index] = opening_tag
-                processed_tokens[closer_index] = "!CLOSE"
+            if token == "](" and self.delimiter_stack.peek() == "[":
+                self.processed_tokens[i] = "!LINK_BREAK"
+                self.external_link_correct = True
                 continue
 
-        # Process opening delimiter
+            # Process closing delimiter
+            if token in delimiters.keys():
+                if self.delimiter_stack.should_close(token):
+                    self.process_closing_delimiter(i, token)
+                    continue
+
+            # Process opening delimiter
+            if self.is_opener(token):
+                if self.accept_opener(i, token):
+                    self.delimiter_stack.append((i, token))
+
+            if token in "\n\n":
+                self.delimiter_stack = DelimiterStack(
+                    [d for d in self.delimiter_stack if d[1] in "```"])
+                if not self.delimiter_stack:  # i.e. we are not in a code block
+                    self.processed_tokens[i] = "!LINE_BREAK"
+
+            if token == "|":
+                if "[[" in self.delimiter_stack.peek():
+                    processed_tokens[i] = "!PIPE"
+            if token == "\t" and self.delimiter_stack.not_in_codeblock():
+                processed_tokens[i] = "!TAB"
+            if token == "---" and self.delimiter_stack.not_in_codeblock():
+                processed_tokens[i] = "!HBAR"
+
+        new_tokens = [
+            processed_tokens[i] if i in processed_tokens else token
+            for i, token in enumerate(tokens)
+        ]
+        return new_tokens
+
+    def is_opener(self, token: str) -> bool:
         if token in openers or token[-2:] == ". ":
             if token[-2:] == ". ":
                 try:
                     int(token[:-2])
                 except ValueError:
-                    continue
-            if accept_opener(delimiter_stack, i, token, tokens):
-                delimiter_stack.append((i, token))
-        if token in "\n\n":
-            delimiter_stack = [d for d in delimiter_stack if d[1] in "```"]
-            if not delimiter_stack:  # i.e. we are not in a code block
-                processed_tokens[i] = "!LINE_BREAK"
+                    return False
+            return True
+        else:
+            return False
 
-        if token == "|":
-            if "[[" in delimiter_stack[-1][1]:
-                processed_tokens[i] = "!PIPE"
-        if token == "\t" and (not delimiter_stack or delimiter_stack[-1][1] not in "```"):
-            processed_tokens[i] = "!TAB"
-        if token == "---" and (not delimiter_stack or delimiter_stack[-1][1] not in "```"):
-            processed_tokens[i] = "!HBAR"
+    def process_closing_delimiter(self, index, token):
+        if token == ")" and not self.external_link_correct:
+            # "unfinshed" hyperlink: don't process (yet)
+            return
+        opener_index, opener_token = self.delimiter_stack.pop()
+        if token == ")" and self.external_link_correct:
+            self.external_link_correct = False
+        closer_index = index
+        opening_tag = get_opener(opener_token)
+        self.processed_tokens[opener_index] = opening_tag
+        self.processed_tokens[closer_index] = "!CLOSE"
 
-    new_tokens = [
-        processed_tokens[i] if i in processed_tokens else token
-        for i, token in enumerate(tokens)
-    ]
-    return new_tokens
-
-
-def accept_opener(
-    stack: list[tuple[int, str]],
-    index: int,
-    token: str,
-    tokens: list[str]
-) -> bool:
-    """Return True if the delimiter stack is not
-    currently awaiting a closer for a pre-formatted code block.
-    Will reject "alternate" delimiters, e.g. if __ is open, reject **."""
-    reject_inside = {
-        "__": "**",
-        "_": "*",
-        "*": "_",
-        "**": "__",
-    }
-    stack_tokens = [t for index, t in stack]
-    if reject_inside.get(token, "not a token") in stack_tokens:
+    def accept_opener(self, index: int, token: str,) -> bool:
+        """Return True if the delimiter stack is not
+        currently awaiting a closer for a pre-formatted code block.
+        Will reject "alternate" delimiters, e.g. if __ is open, reject **."""
+        reject_inside = {
+            "__": "**",
+            "_": "*",
+            "*": "_",
+            "**": "__",
+        }
+        stack_tokens = [t for index, t in self.delimiter_stack]
+        if reject_inside.get(token, "not a token") in stack_tokens:
+            return False
+        if self.delimiter_stack.peek() == "[" and token not in ["*", "**", "__", "_"]:
+            return False
+        if self.delimiter_stack.not_in_codeblock():
+            return True
+        if not self.delimiter_stack:
+            return True
         return False
-    if stack and stack_tokens[-1] == "[" and token not in ["*", "**", "__", "_"]:
-        return False
-    if stack and stack_tokens[-1] not in "```":
-        return True
-    if not stack:
-        return True
-    return False
 
 
 if __name__ == '__main__':
@@ -444,7 +478,7 @@ if __name__ == '__main__':
     S = StringPeek(note)
     tokeniser = Tokeniser(S)
     tokens = tokeniser.tokenise()
-    processed_tokens = process_tokens(tokens)
+    processed_tokens = DelimiterProcessor.process_tokens(tokens)
     print(tokens)
     print(processed_tokens)
     print("\n\n")
