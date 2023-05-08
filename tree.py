@@ -65,71 +65,62 @@ class Node:
         else:
             return False
 
+    @property
+    def last_child(self) -> Optional["Node"]:
+        if self.children:
+            return self.children[-1]
+        else:
+            return None
+
     def __repr__(self) -> str:
         return str(self.value)
 
+    def begin_or_end_frontmatter(self):
+        if not self.children:
+            self.add_child(Element.FRONTMATTER)
+            return
+        if self.children[0].value == Element.FRONTMATTER:
+            self.close_children()
+            return
+
     def catch_token(self, token: str):
 
-        if token == "!HBAR" and self.is_frontmatter():
-            if not self.children:
-                self.add_child(Element.FRONTMATTER)
+        # Special cases for the root node
+        if self.value == Element.ROOT:
+            if token == "!HBAR" and self.check_if_frontmatter():
+                self.begin_or_end_frontmatter()
+
+            # Track number of tabs for list indentation levels
+            elif token == "!TAB":
+                self.tab_count += 1
                 return
-            if self.children[0].value == Element.FRONTMATTER:
+
+            elif (token == "!ITEM" or token[:5] == "!OLI_"):
+                correct_list = self.find_correct_list(token)
+                correct_list.add_child(Element.ITEM)
+                self.root.tab_count = 0
+                return
+
+            # Some elements should always be direct offspring of the root, for example
+            # headings. So we clean up
+            elif token in Node.top_level_elements:
+                self.remove_trailing_line_breaks()
                 self.close_children()
+                self.add_child(self.evaluate_token(token))
                 return
 
-        if token == "!TAB" and self.value == Element.ROOT:
-            self.tab_count += 1
-            return
-
-        if (token == "!ITEM" or token[:5] == "!OLI_") and self.value == Element.ROOT:
-            correct_list = self.find_correct_list(token)
-            correct_list.add_child(Element.ITEM)
-            self.root.tab_count = 0
-            return
-
-        # block level elements
-        if token in Node.top_level_elements and self.value == Element.ROOT:
-            self.remove_trailing_line_breaks()
-            self.close_children()
-            self.add_child(self.evaluate_token(token))
-            return
-
+        # Recursion step
         if self.last_child_open():
-            self.children[-1].catch_token(token)
+            self.last_child.catch_token(token)
+            return
 
-        # special cases
+        # Special cases for branch nodes
         elif token == "!CLOSE":
             self.closed = True
-            if self.value == Element.EXTERNAL_LINK:
-                self.process_external_link()
-            if self.internal_link_has_no_display_text():
-                link = "".join(str(child) for child in self.children)
-                self.link_to = link
-            if self.value == Element.EMBED_LINK and self.link_to[-4:] in [".jpg", ".png"]:
-                self.value = Element.IMAGE
-                if self.children:
-                    child_string = "".join([str(child.value)
-                                           for child in self.children])
-                    self.image_width, _, self.image_height = child_string.partition(
-                        "x")
-                    if not (self.is_digits(self.image_width) and self.is_digits(self.image_height)):
-                        self.image_width, self.image_height = "", ""
-                    self.children = []
+            self.close_links_and_embeds()
 
         elif token == "!LINE_BREAK":
-            if self.children and self.children[-1].value == Element.LINE_BREAK:
-                self.children.pop()
-                self.close_paragraph(token)
-                return
-            if self.value in [Element.UNORDERED_LIST, Element.ORDERED_LIST]:
-                self.root.close_children()
-                return
-            if self.value == Element.PARAGRAPH:
-                self.close_paragraph(token)
-            else:
-                new_value = self.evaluate_token(token)
-                self.add_child(new_value)
+            self.handle_line_breaks()
 
         elif token == "!PIPE" and self.value in (Element.INTERNAL_LINK, Element.EMBED_LINK):
             if self.children:
@@ -151,9 +142,40 @@ class Node:
                         new_value in [Element.EM, Element.STRONG]:
                     self.remove_trailing_line_breaks()
                     self.add_child(Element.PARAGRAPH)
-                    self.root.catch_token(token)
+                    self.catch_token(token)
                     return
             self.add_child(new_value)
+
+    def handle_line_breaks(self):
+        if self.last_child == Element.LINE_BREAK:
+            self.children.pop()
+            self.close_paragraph(token)
+            return
+        if self.value in [Element.UNORDERED_LIST, Element.ORDERED_LIST]:
+            self.root.close_children()
+            return
+        if self.value == Element.PARAGRAPH:
+            self.close_paragraph(token)
+        else:
+            new_value = self.evaluate_token(token)
+            self.add_child(new_value)
+
+    def close_links_and_embeds(self):
+        if self.value == Element.EXTERNAL_LINK:
+            self.process_external_link()
+        if self.internal_link_has_no_display_text():
+            link = "".join(str(child) for child in self.children)
+            self.link_to = link
+        if self.value == Element.EMBED_LINK and self.link_to[-4:] in [".jpg", ".png"]:
+            self.value = Element.IMAGE
+            if self.children:
+                child_string = "".join([str(child.value)
+                                       for child in self.children])
+                self.image_width, _, self.image_height = child_string.partition(
+                    "x")
+                if not (self.is_digits(self.image_width) and self.is_digits(self.image_height)):
+                    self.image_width, self.image_height = "", ""
+                self.children = []
 
     def find_correct_list(self, token: str) -> "Node":
         list_nodes = [Element.UNORDERED_LIST, Element.ORDERED_LIST]
@@ -163,12 +185,12 @@ class Node:
         if list_type == Element.ORDERED_LIST:
             list_number = int(token.partition("_")[2])
         if self.tab_count == 0:
-            if self.children[-1].value == list_type:
+            if self.last_child == list_type:
                 correct_list = self.children[-1]
             else:
                 self.add_child(list_type)
                 if list_number:
-                    self.children[-1].start_number = list_number
+                    self.last_child.start_number = list_number
                 correct_list = self.children[-1]
         if self.tab_count > 0:
             current_node = self
@@ -179,8 +201,8 @@ class Node:
                 else:
                     current_node.add_child(list_type)
                     if list_number:
-                        current_node.children[-1].start_number = list_number
-                    current_node.children[-1].list_indent = current_node.list_indent + 1
+                        current_node.last_child.start_number = list_number
+                    current_node.last_child.list_indent = current_node.list_indent + 1
                 if self.tab_count == current_node.list_indent:
                     correct_list = current_node
                     searching = False
@@ -202,7 +224,7 @@ class Node:
                 child.close_children()
         self.closed = True
 
-    def is_frontmatter(self) -> bool:
+    def check_if_frontmatter(self) -> bool:
         if self.value == Element.ROOT:
             if not self.children:
                 return True
@@ -263,7 +285,10 @@ class Node:
             return token
 
     def __eq__(self, other):
-        return self.children == other.children and self.value == other.value
+        if isinstance(other, Node):
+            return self.children == other.children and self.value == other.value
+        elif isinstance(other, (Element, str)):
+            return self.value == other
 
     def __str__(self):
         if self.link_to:
