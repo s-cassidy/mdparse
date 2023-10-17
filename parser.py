@@ -140,9 +140,3 @@ def parse(note: str) -> Page:
         print(content)
     output = Page(frontmatter, content)
     return output
-
-
-if __name__ == "__main__":
-    with open('../../vault/test file.md', 'r', encoding='utf8') as f:
-        S = f.read()
-    tree = parse(S)

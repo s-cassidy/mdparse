@@ -302,16 +302,3 @@ def print_node(Node, depth, stream=stdout) -> None:
     print(node_string, file=stream)
     for c in Node.children:
         print_node(c, depth + 1, stream=stream)
-
-
-if __name__ == '__main__':
-    import tokeniser
-
-    with open('../website/static/vault/202210260827 christmas dinner ideas.md', 'r', encoding='utf8') as f:
-        note = f.read()
-    S = tokeniser.StringPeek(note)
-    tokens = tokeniser.process_tokens(tokeniser.Tokeniser(S).tokenise())
-    tree = Node(Element.ROOT, parent=None, root=None)
-    for token in tokens:
-        tree.catch_token(token)
-    print_node(tree, 0)

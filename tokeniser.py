@@ -471,15 +471,3 @@ class DelimiterProcessor:
         if not self.delimiter_stack:
             return True
         return False
-
-
-if __name__ == '__main__':
-    with open('../website/static/vault/202210260827 Christmas dinner ideas.md', 'r', encoding='utf8') as f:
-        note = f.read()
-    S = StringPeek(note)
-    tokeniser = Tokeniser(S)
-    tokens = tokeniser.tokenise()
-    processed_tokens = DelimiterProcessor.process_tokens(tokens)
-    print(tokens)
-    print(processed_tokens)
-    print("\n\n")
